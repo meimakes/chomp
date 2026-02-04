@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 mod db;
 mod food;
 mod logging;
+mod mcp;
 
 #[derive(Parser)]
 #[command(name = "chomp")]
@@ -86,6 +87,8 @@ enum Commands {
     },
     /// Show database stats
     Stats,
+    /// Start MCP server (for AI assistants like Claude Desktop)
+    Serve,
 }
 
 fn main() -> Result<()> {
@@ -169,6 +172,9 @@ fn main() -> Result<()> {
             println!("Log entries: {}", stats.log_count);
             println!("First entry: {}", stats.first_entry.unwrap_or_default());
             println!("Last entry: {}", stats.last_entry.unwrap_or_default());
+        }
+        Some(Commands::Serve) => {
+            mcp::serve()?;
         }
         None => {
             // Default action: log food
