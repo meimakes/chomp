@@ -82,10 +82,6 @@ AI calls `chomp today --json` → reports totals without searching
 - Cronometer — good but no API, no CLI
 - noms (Python) — nutrition data but not tracking-focused
 
-## Status
-
-✅ Core CLI working — add, log, search, today, history, export
-
 ## License
 
 MIT
