@@ -18,20 +18,32 @@ chomp ribeye 8oz                 # logs 8oz ribeye
 chomp "bare bar"                 # logs bare bar
 
 chomp add ribeye --protein 23 --fat 18 --carbs 0 --per 100g
+chomp edit ribeye --protein 25 --fat 20  # update macros
 chomp search salmon              # fuzzy match
 chomp today                      # show today's totals
 chomp history                    # recent logs
 chomp export --csv               # for spreadsheets
 chomp import usda                # seed from USDA database
+chomp delete "food name"         # delete a food entry
 ```
 
-## Smart Features
+## Implemented Features
 
 - **Fuzzy matching** — "rib eye" = "ribeye"
-- **Learned portions** — "salmon" defaults to your usual 4oz
+- **Learned portions** — "salmon" defaults to your usual 4oz (via `default_amount` field)
 - **Aliases** — "bb" = "bare bar"
-- **Compound foods** — "breakfast = 3 eggs + 2 bacon"
-- **Nutrition label import** — send photo, AI extracts + adds to DB
+- **JSON output** — All commands support `--json` for AI integration
+- **MCP server** — `chomp serve` for Claude Desktop integration
+
+## Roadmap / Planned Features
+
+Features mentioned but not yet implemented:
+
+- **Compound foods** — "breakfast = 3 eggs + 2 bacon" (save multi-item meals as single entry)
+- **USDA import** — `chomp import usda` to seed database from FoodData Central
+- **CSV import** — `chomp import csv --path foods.csv` for bulk loading
+- **Nutrition label import** — Dedicated workflow for photo → AI extraction → DB (currently works via manual `chomp add`)
+- **Smart defaults** — Learn your typical portions and auto-suggest them
 
 ## AI Integration
 

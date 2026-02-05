@@ -307,6 +307,70 @@ impl Database {
         Ok(entries)
     }
 
+    pub fn edit_food(
+        &self, 
+        name: &str, 
+        protein: Option<f64>, 
+        fat: Option<f64>, 
+        carbs: Option<f64>, 
+        serving: Option<&str>
+    ) -> Result<()> {
+        // Get the current food
+        let food = self.get_food_by_name(name)?
+            .ok_or_else(|| anyhow::anyhow!("Food not found: '{}'", name))?;
+        
+        // Build update query based on which fields are provided
+        let mut updates = Vec::new();
+        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        
+        if let Some(p) = protein {
+            updates.push("protein = ?");
+            params_vec.push(Box::new(p));
+        }
+        if let Some(f) = fat {
+            updates.push("fat = ?");
+            params_vec.push(Box::new(f));
+        }
+        if let Some(c) = carbs {
+            updates.push("carbs = ?");
+            params_vec.push(Box::new(c));
+        }
+        if let Some(s) = serving {
+            updates.push("serving = ?");
+            params_vec.push(Box::new(s.to_string()));
+        }
+        
+        // Calculate new calories if macros changed
+        let new_protein = protein.unwrap_or(food.protein);
+        let new_fat = fat.unwrap_or(food.fat);
+        let new_carbs = carbs.unwrap_or(food.carbs);
+        let new_calories = (new_protein * 4.0) + (new_fat * 9.0) + (new_carbs * 4.0);
+        
+        updates.push("calories = ?");
+        params_vec.push(Box::new(new_calories));
+        
+        if updates.is_empty() {
+            return Ok(());
+        }
+        
+        // Add the name parameter for WHERE clause
+        params_vec.push(Box::new(name.to_string()));
+        
+        let query = format!(
+            "UPDATE foods SET {} WHERE LOWER(name) = LOWER(?)",
+            updates.join(", ")
+        );
+        
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        
+        self.conn.execute(&query, params_refs.as_slice())?;
+        Ok(())
+    }
+
+    pub fn search_food(&self, name: &str) -> Result<Option<Food>> {
+        self.get_food_by_name(name)
+    }
+
     pub fn delete_food(&self, name: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM foods WHERE LOWER(name) = LOWER(?1)",
