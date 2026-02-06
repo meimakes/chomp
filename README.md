@@ -13,18 +13,24 @@ Local SQLite database that learns YOUR foods. AI queries it instead of web searc
 ## Commands
 
 ```bash
-chomp bacon                      # logs bacon (default action)
+# Log food (default action)
+chomp bacon                      # logs bacon
 chomp ribeye 8oz                 # logs 8oz ribeye
 chomp "bare bar"                 # logs bare bar
 
+# Manage foods
 chomp add ribeye --protein 23 --fat 18 --carbs 0 --per 100g
-chomp edit ribeye --protein 25 --fat 20  # update macros
+chomp edit ribeye --protein 25 --fat 20
+chomp delete "food name"
+
+# Query
 chomp search salmon              # fuzzy match
 chomp today                      # show today's totals
 chomp history                    # recent logs
+
+# Import/Export
 chomp export --csv               # for spreadsheets
 chomp import usda                # seed from USDA database
-chomp delete "food name"         # delete a food entry
 ```
 
 ## Implemented Features

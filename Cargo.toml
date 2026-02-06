@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Local food database CLI for AI-assisted nutrition tracking"
 license = "MIT"
-repository = "https://github.com/ruthmade/chomp"
+repository = "https://github.com/meimakes/chomp"
 keywords = ["nutrition", "food", "cli", "tracking", "ai"]
 categories = ["command-line-utilities"]
 
