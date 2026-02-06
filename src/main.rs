@@ -97,6 +97,30 @@ enum Commands {
         /// Food name to delete
         name: String,
     },
+    /// Delete a log entry by ID
+    Unlog {
+        /// Log entry ID to delete
+        id: i64,
+    },
+    /// Delete the most recent log entry
+    UnlogLast,
+    /// Edit a log entry
+    EditLog {
+        /// Log entry ID to edit
+        id: i64,
+        /// New amount
+        #[arg(long)]
+        amount: Option<String>,
+        /// New protein in grams
+        #[arg(long, short)]
+        protein: Option<f64>,
+        /// New fat in grams
+        #[arg(long, short)]
+        fat: Option<f64>,
+        /// New carbs in grams
+        #[arg(long, short)]
+        carbs: Option<f64>,
+    },
     /// Show database stats
     Stats,
     /// Start MCP server (for AI assistants like Claude Desktop)
@@ -181,6 +205,33 @@ fn main() -> Result<()> {
         Some(Commands::Delete { name }) => {
             db.delete_food(&name)?;
             println!("Deleted: {}", name);
+        }
+        Some(Commands::Unlog { id }) => {
+            let entry = db.delete_log_entry(id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&entry)?);
+            } else {
+                println!("Deleted log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
+                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
+            }
+        }
+        Some(Commands::UnlogLast) => {
+            let entry = db.delete_last_log_entry()?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&entry)?);
+            } else {
+                println!("Deleted last log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
+                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
+            }
+        }
+        Some(Commands::EditLog { id, amount, protein, fat, carbs }) => {
+            let entry = db.edit_log_entry(id, amount, protein, fat, carbs)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&entry)?);
+            } else {
+                println!("Updated log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
+                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
+            }
         }
         Some(Commands::Stats) => {
             let stats = db.get_stats()?;

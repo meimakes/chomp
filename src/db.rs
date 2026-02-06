@@ -456,4 +456,135 @@ impl Database {
         println!("CSV import from {} not yet implemented", path);
         Ok(())
     }
+
+    pub fn delete_log_entry(&self, id: i64) -> Result<LogEntry> {
+        // Get the entry before deleting for confirmation
+        let entry: LogEntry = self.conn.query_row(
+            "SELECT l.id, l.date, f.name, l.food_id, l.amount, l.protein, l.fat, l.carbs, l.calories
+             FROM log l
+             JOIN foods f ON l.food_id = f.id
+             WHERE l.id = ?1",
+            params![id],
+            |row| {
+                Ok(LogEntry {
+                    id: Some(row.get(0)?),
+                    date: row.get(1)?,
+                    food_name: row.get(2)?,
+                    food_id: row.get(3)?,
+                    amount: row.get(4)?,
+                    protein: row.get(5)?,
+                    fat: row.get(6)?,
+                    carbs: row.get(7)?,
+                    calories: row.get(8)?,
+                })
+            },
+        )?;
+        
+        self.conn.execute("DELETE FROM log WHERE id = ?1", params![id])?;
+        Ok(entry)
+    }
+
+    pub fn delete_last_log_entry(&self) -> Result<LogEntry> {
+        // Get the most recent entry
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM log ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        self.delete_log_entry(id)
+    }
+
+    pub fn edit_log_entry(
+        &self,
+        id: i64,
+        amount: Option<String>,
+        protein: Option<f64>,
+        fat: Option<f64>,
+        carbs: Option<f64>,
+    ) -> Result<LogEntry> {
+        // Get the current entry
+        let entry: LogEntry = self.conn.query_row(
+            "SELECT l.id, l.date, f.name, l.food_id, l.amount, l.protein, l.fat, l.carbs, l.calories
+             FROM log l
+             JOIN foods f ON l.food_id = f.id
+             WHERE l.id = ?1",
+            params![id],
+            |row| {
+                Ok(LogEntry {
+                    id: Some(row.get(0)?),
+                    date: row.get(1)?,
+                    food_name: row.get(2)?,
+                    food_id: row.get(3)?,
+                    amount: row.get(4)?,
+                    protein: row.get(5)?,
+                    fat: row.get(6)?,
+                    carbs: row.get(7)?,
+                    calories: row.get(8)?,
+                })
+            },
+        )?;
+
+        // Build update query based on which fields are provided
+        let mut updates = Vec::new();
+        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        
+        let new_amount = amount.clone().unwrap_or(entry.amount.clone());
+        let new_protein = protein.unwrap_or(entry.protein);
+        let new_fat = fat.unwrap_or(entry.fat);
+        let new_carbs = carbs.unwrap_or(entry.carbs);
+        let new_calories = (new_protein * 4.0) + (new_fat * 9.0) + (new_carbs * 4.0);
+
+        if amount.is_some() {
+            updates.push("amount = ?");
+            params_vec.push(Box::new(new_amount.clone()));
+        }
+        if protein.is_some() {
+            updates.push("protein = ?");
+            params_vec.push(Box::new(new_protein));
+        }
+        if fat.is_some() {
+            updates.push("fat = ?");
+            params_vec.push(Box::new(new_fat));
+        }
+        if carbs.is_some() {
+            updates.push("carbs = ?");
+            params_vec.push(Box::new(new_carbs));
+        }
+        
+        // Always update calories if any macro changed
+        if protein.is_some() || fat.is_some() || carbs.is_some() {
+            updates.push("calories = ?");
+            params_vec.push(Box::new(new_calories));
+        }
+
+        if updates.is_empty() {
+            return Ok(entry);
+        }
+
+        // Add the id parameter for WHERE clause
+        params_vec.push(Box::new(id));
+        
+        let query = format!(
+            "UPDATE log SET {} WHERE id = ?",
+            updates.join(", ")
+        );
+        
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        
+        self.conn.execute(&query, params_refs.as_slice())?;
+
+        // Return updated entry
+        Ok(LogEntry {
+            id: Some(id),
+            date: entry.date,
+            food_name: entry.food_name,
+            food_id: entry.food_id,
+            amount: new_amount,
+            protein: new_protein,
+            fat: new_fat,
+            carbs: new_carbs,
+            calories: new_calories,
+        })
+    }
 }
