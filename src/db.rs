@@ -33,6 +33,14 @@ pub struct Stats {
 }
 
 impl Database {
+    /// Open an in-memory database (for testing)
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        let db = Self { conn };
+        db.init()?;
+        Ok(db)
+    }
+
     pub fn open() -> Result<Self> {
         let db_path = Self::db_path()?;
         
@@ -794,7 +802,6 @@ impl Database {
     }
 
     /// List compound food details
-    #[allow(dead_code)]
     pub fn get_compound_food(&self, name: &str) -> Result<Vec<(String, String)>> {
         let compound_id: i64 = self.conn.query_row(
             "SELECT id FROM compound_foods WHERE LOWER(name) = LOWER(?1)",
@@ -813,5 +820,196 @@ impl Database {
         })?.filter_map(|r| r.ok()).collect();
 
         Ok(items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::food::{Food, Macros};
+
+    fn test_db() -> Database {
+        Database::open_in_memory().unwrap()
+    }
+
+    fn sample_food(name: &str) -> Food {
+        Food::new(name, 26.0, 15.0, 0.0, 250.0, "100g", vec![])
+    }
+
+    #[test]
+    fn test_add_and_retrieve_food() {
+        let db = test_db();
+        let food = sample_food("Ribeye");
+        let id = db.add_food(&food).unwrap();
+        assert!(id > 0);
+
+        let found = db.get_food_by_name("ribeye").unwrap().unwrap();
+        assert_eq!(found.name, "Ribeye");
+        assert_eq!(found.protein, 26.0);
+    }
+
+    #[test]
+    fn test_add_food_with_aliases() {
+        let db = test_db();
+        let food = Food::new("Chicken Breast", 31.0, 3.6, 0.0, 165.0, "100g", vec!["chicken".to_string(), "chx".to_string()]);
+        db.add_food(&food).unwrap();
+
+        let found = db.get_food_by_name("chicken").unwrap().unwrap();
+        assert_eq!(found.name, "Chicken Breast");
+
+        let found2 = db.get_food_by_name("chx").unwrap().unwrap();
+        assert_eq!(found2.name, "Chicken Breast");
+    }
+
+    #[test]
+    fn test_search_foods_fuzzy() {
+        let db = test_db();
+        db.add_food(&sample_food("Ribeye Steak")).unwrap();
+        db.add_food(&sample_food("Rice")).unwrap();
+        db.add_food(&sample_food("Salmon")).unwrap();
+
+        let results = db.search_foods("rib").unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].name, "Ribeye Steak");
+    }
+
+    #[test]
+    fn test_log_food_and_today_totals() {
+        let db = test_db();
+        let food = sample_food("Eggs");
+        let id = db.add_food(&food).unwrap();
+
+        let macros = Macros { protein: 12.0, fat: 10.0, carbs: 1.0, calories: 142.0 };
+        let entry = db.log_food(id, "2", &macros).unwrap();
+        assert_eq!(entry.food_name, "Eggs");
+        assert_eq!(entry.protein, 12.0);
+
+        let totals = db.get_today_totals().unwrap();
+        assert_eq!(totals.protein, 12.0);
+        assert_eq!(totals.calories, 142.0);
+
+        // Log another
+        let macros2 = Macros { protein: 26.0, fat: 15.0, carbs: 0.0, calories: 250.0 };
+        db.log_food(id, "100g", &macros2).unwrap();
+
+        let totals = db.get_today_totals().unwrap();
+        assert_eq!(totals.protein, 38.0);
+    }
+
+    #[test]
+    fn test_get_history() {
+        let db = test_db();
+        let id = db.add_food(&sample_food("Bacon")).unwrap();
+        let macros = Macros { protein: 12.0, fat: 40.0, carbs: 0.0, calories: 400.0 };
+        db.log_food(id, "100g", &macros).unwrap();
+
+        let history = db.get_history(7).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].food_name, "Bacon");
+    }
+
+    #[test]
+    fn test_edit_food() {
+        let db = test_db();
+        db.add_food(&sample_food("Salmon")).unwrap();
+
+        db.edit_food("Salmon", Some(25.0), None, None, None).unwrap();
+        let food = db.get_food_by_name("Salmon").unwrap().unwrap();
+        assert_eq!(food.protein, 25.0);
+        // calories recalculated: 25*4 + 15*9 + 0*4 = 235
+        assert_eq!(food.calories, 235.0);
+    }
+
+    #[test]
+    fn test_delete_food() {
+        let db = test_db();
+        db.add_food(&sample_food("Temp Food")).unwrap();
+        assert!(db.get_food_by_name("Temp Food").unwrap().is_some());
+
+        db.delete_food("Temp Food").unwrap();
+        assert!(db.get_food_by_name("Temp Food").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_log_entry() {
+        let db = test_db();
+        let id = db.add_food(&sample_food("Apple")).unwrap();
+        let macros = Macros { protein: 0.3, fat: 0.2, carbs: 14.0, calories: 52.0 };
+        let entry = db.log_food(id, "1", &macros).unwrap();
+
+        let deleted = db.delete_log_entry(entry.id.unwrap()).unwrap();
+        assert_eq!(deleted.food_name, "Apple");
+
+        let totals = db.get_today_totals().unwrap();
+        assert_eq!(totals.calories, 0.0);
+    }
+
+    #[test]
+    fn test_delete_last_log_entry() {
+        let db = test_db();
+        let id = db.add_food(&sample_food("Banana")).unwrap();
+        let m = Macros { protein: 1.0, fat: 0.3, carbs: 23.0, calories: 89.0 };
+        db.log_food(id, "1", &m).unwrap();
+        db.log_food(id, "1", &m).unwrap();
+
+        let deleted = db.delete_last_log_entry().unwrap();
+        assert_eq!(deleted.food_name, "Banana");
+
+        let totals = db.get_today_totals().unwrap();
+        assert_eq!(totals.calories, 89.0);
+    }
+
+    #[test]
+    fn test_edit_log_entry() {
+        let db = test_db();
+        let id = db.add_food(&sample_food("Steak")).unwrap();
+        let m = Macros { protein: 26.0, fat: 15.0, carbs: 0.0, calories: 250.0 };
+        let entry = db.log_food(id, "100g", &m).unwrap();
+
+        let updated = db.edit_log_entry(entry.id.unwrap(), Some("200g".to_string()), Some(52.0), None, None).unwrap();
+        assert_eq!(updated.amount, "200g");
+        assert_eq!(updated.protein, 52.0);
+    }
+
+    #[test]
+    fn test_get_stats() {
+        let db = test_db();
+        let stats = db.get_stats().unwrap();
+        assert_eq!(stats.food_count, 0);
+        assert_eq!(stats.log_count, 0);
+
+        let id = db.add_food(&sample_food("Rice")).unwrap();
+        let m = Macros { protein: 2.7, fat: 0.3, carbs: 28.0, calories: 130.0 };
+        db.log_food(id, "100g", &m).unwrap();
+
+        let stats = db.get_stats().unwrap();
+        assert_eq!(stats.food_count, 1);
+        assert_eq!(stats.log_count, 1);
+    }
+
+    #[test]
+    fn test_duplicate_food_handling() {
+        let db = test_db();
+        db.add_food(&sample_food("Eggs")).unwrap();
+        let result = db.add_food(&sample_food("Eggs"));
+        assert!(result.is_err()); // UNIQUE constraint
+    }
+
+    #[test]
+    fn test_compound_food() {
+        let db = test_db();
+        db.add_food(&Food::new("Rice", 2.7, 0.3, 28.0, 130.0, "100g", vec![])).unwrap();
+        db.add_food(&Food::new("Chicken Breast", 31.0, 3.6, 0.0, 165.0, "100g", vec![])).unwrap();
+
+        db.create_compound_food("Chicken Rice Bowl", &[
+            ("Rice".to_string(), "200g".to_string()),
+            ("Chicken Breast".to_string(), "150g".to_string()),
+        ]).unwrap();
+
+        let found = db.get_food_by_name("Chicken Rice Bowl").unwrap().unwrap();
+        assert!(found.calories > 0.0);
+
+        let items = db.get_compound_food("Chicken Rice Bowl").unwrap();
+        assert_eq!(items.len(), 2);
     }
 }

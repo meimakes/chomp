@@ -133,4 +133,33 @@ mod tests {
         assert_eq!(parse_input("heavy cream 50ml"), ("heavy cream".to_string(), Some("50ml".to_string())));
         assert_eq!(parse_input("2 eggs"), ("eggs".to_string(), Some("2".to_string())));
     }
+
+    #[test]
+    fn test_parse_input_single_word() {
+        let (name, amount) = parse_input("bacon");
+        assert_eq!(name, "bacon");
+        assert!(amount.is_none());
+    }
+
+    #[test]
+    fn test_parse_input_empty() {
+        let (name, amount) = parse_input("");
+        assert_eq!(name, "");
+        assert!(amount.is_none());
+    }
+
+    #[test]
+    fn test_parse_input_number_first() {
+        let (name, amount) = parse_input("3 slices pizza");
+        // "3" is number, so name="slices pizza", amount=Some("3")
+        assert_eq!(amount, Some("3".to_string()));
+        assert_eq!(name, "slices pizza");
+    }
+
+    #[test]
+    fn test_parse_input_with_unit_separated() {
+        let (name, amount) = parse_input("chicken breast 6 oz");
+        assert_eq!(name, "chicken breast");
+        assert_eq!(amount, Some("6 oz".to_string()));
+    }
 }

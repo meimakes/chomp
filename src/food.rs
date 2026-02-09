@@ -138,5 +138,44 @@ mod tests {
     fn test_to_grams() {
         assert_eq!(to_grams(100.0, "g"), Some(100.0));
         assert!((to_grams(1.0, "oz").unwrap() - 28.3495).abs() < 0.01);
+        assert!((to_grams(1.0, "lb").unwrap() - 453.592).abs() < 0.01);
+        assert_eq!(to_grams(1.0, "kg"), Some(1000.0));
+        assert_eq!(to_grams(1.0, "cup"), Some(240.0));
+        assert_eq!(to_grams(1.0, "tbsp"), Some(15.0));
+        assert_eq!(to_grams(1.0, "tsp"), Some(5.0));
+        assert_eq!(to_grams(1.0, "bar"), Some(100.0));
+    }
+
+    #[test]
+    fn test_calculate_same_unit() {
+        let food = Food::new("Rice", 2.7, 0.3, 28.0, 130.0, "100g", vec![]);
+        let m = food.calculate("200g").unwrap();
+        assert!((m.protein - 5.4).abs() < 0.01);
+        assert!((m.calories - 260.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_calculate_cross_unit() {
+        // 8oz of a food with 100g serving
+        let food = Food::new("Ribeye", 26.0, 15.0, 0.0, 250.0, "100g", vec![]);
+        let m = food.calculate("8oz").unwrap();
+        let expected_mult = (8.0 * 28.3495) / 100.0;
+        assert!((m.protein - 26.0 * expected_mult).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_calculate_serving_unit() {
+        let food = Food::new("Bare Bar", 20.0, 7.0, 22.0, 210.0, "1bar", vec![]);
+        let m = food.calculate("1bar").unwrap();
+        assert!((m.calories - 210.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_macros_add() {
+        let mut a = Macros { protein: 10.0, fat: 5.0, carbs: 20.0, calories: 165.0 };
+        let b = Macros { protein: 5.0, fat: 3.0, carbs: 10.0, calories: 87.0 };
+        a.add(&b);
+        assert_eq!(a.protein, 15.0);
+        assert_eq!(a.calories, 252.0);
     }
 }
