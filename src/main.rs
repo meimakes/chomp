@@ -121,6 +121,14 @@ enum Commands {
         #[arg(long, short)]
         carbs: Option<f64>,
     },
+    /// Create a compound food (e.g., "breakfast = 3 eggs + 2 bacon")
+    Compound {
+        /// Name for the compound food
+        name: String,
+        /// Components in format "amount food + amount food" (e.g., "3 eggs + 2 bacon")
+        #[arg(long, short = 'i')]
+        items: String,
+    },
     /// Show database stats
     Stats,
     /// Start MCP server (for AI assistants like Claude Desktop)
@@ -232,6 +240,23 @@ fn main() -> Result<()> {
                 println!("Updated log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
                     entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
             }
+        }
+        Some(Commands::Compound { name, items }) => {
+            // Parse "3 eggs + 2 bacon" format
+            let parts: Vec<(String, String)> = items.split('+')
+                .map(|part| {
+                    let part = part.trim();
+                    let words: Vec<&str> = part.split_whitespace().collect();
+                    if words.len() >= 2 {
+                        let amount = words[0].to_string();
+                        let food = words[1..].join(" ");
+                        (food, format!("{}{}", amount, "serving"))
+                    } else {
+                        (part.to_string(), "1serving".to_string())
+                    }
+                })
+                .collect();
+            db.create_compound_food(&name, &parts)?;
         }
         Some(Commands::Stats) => {
             let stats = db.get_stats()?;

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Local, NaiveDate};
+use chrono::Local;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use rusqlite::{params, Connection};
@@ -82,6 +82,21 @@ impl Database {
                 carbs REAL NOT NULL,
                 calories REAL NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (food_id) REFERENCES foods(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS compound_foods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS compound_food_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                compound_food_id INTEGER NOT NULL,
+                food_id INTEGER NOT NULL,
+                amount TEXT NOT NULL,
+                FOREIGN KEY (compound_food_id) REFERENCES compound_foods(id) ON DELETE CASCADE,
                 FOREIGN KEY (food_id) REFERENCES foods(id)
             );
 
@@ -446,14 +461,151 @@ impl Database {
     }
 
     pub fn import_usda(&self) -> Result<()> {
-        // TODO: Implement USDA FoodData Central import
-        println!("USDA import not yet implemented");
+        use std::io::Read;
+        
+        println!("Downloading USDA SR Legacy dataset...");
+        let url = "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_sr_legacy_food_csv_2018-04.zip";
+        let response = reqwest::blocking::get(url)
+            .map_err(|e| anyhow::anyhow!("Failed to download USDA data: {}", e))?;
+        
+        let bytes = response.bytes()
+            .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
+        
+        println!("Extracting data...");
+        let reader = std::io::Cursor::new(&bytes);
+        let mut archive = zip::ZipArchive::new(reader)?;
+        
+        // Read food.csv to get food names and fdc_ids
+        let mut food_csv = String::new();
+        archive.by_name("food.csv")?.read_to_string(&mut food_csv)?;
+        
+        // Read food_nutrient.csv for nutrient values
+        let mut nutrient_csv = String::new();
+        archive.by_name("food_nutrient.csv")?.read_to_string(&mut nutrient_csv)?;
+        
+        // Parse foods: fdc_id -> description
+        let mut foods: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut food_reader = csv::Reader::from_reader(food_csv.as_bytes());
+        for record in food_reader.records() {
+            let record = record?;
+            let fdc_id = record.get(0).unwrap_or("").to_string();
+            let description = record.get(2).unwrap_or("").to_string();
+            if !description.is_empty() {
+                foods.insert(fdc_id, description);
+            }
+        }
+        
+        // Nutrient IDs: 1003=protein, 1004=fat, 1005=carbs, 1008=calories
+        // Parse nutrients: fdc_id -> (protein, fat, carbs, calories)
+        let mut nutrients: std::collections::HashMap<String, (f64, f64, f64, f64)> = std::collections::HashMap::new();
+        let mut nut_reader = csv::Reader::from_reader(nutrient_csv.as_bytes());
+        for record in nut_reader.records() {
+            let record = record?;
+            let fdc_id = record.get(1).unwrap_or("").to_string();
+            let nutrient_id = record.get(2).unwrap_or("");
+            let amount: f64 = record.get(3).unwrap_or("0").parse().unwrap_or(0.0);
+            
+            let entry = nutrients.entry(fdc_id).or_insert((0.0, 0.0, 0.0, 0.0));
+            match nutrient_id {
+                "1003" => entry.0 = amount,
+                "1004" => entry.1 = amount,
+                "1005" => entry.2 = amount,
+                "1008" => entry.3 = amount,
+                _ => {}
+            }
+        }
+        
+        // Filter to foods that have all macros and reasonable names
+        println!("Importing foods...");
+        let mut count = 0;
+        
+        self.conn.execute("BEGIN", [])?;
+        
+        for (fdc_id, name) in &foods {
+            if let Some(&(protein, fat, carbs, calories)) = nutrients.get(fdc_id) {
+                // Skip foods with no nutritional data
+                if protein == 0.0 && fat == 0.0 && carbs == 0.0 && calories == 0.0 {
+                    continue;
+                }
+                // Skip very long or weird names
+                if name.len() > 100 || name.contains("USDA") {
+                    continue;
+                }
+                
+                let clean_name = name.to_lowercase();
+                // Title case
+                let title_name: String = clean_name.split_whitespace()
+                    .map(|w| {
+                        let mut c = w.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().to_string() + c.as_str(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                
+                let result = self.conn.execute(
+                    "INSERT OR IGNORE INTO foods (name, protein, fat, carbs, calories, serving)
+                     VALUES (?1, ?2, ?3, ?4, ?5, '100g')",
+                    params![title_name, protein, fat, carbs, calories],
+                );
+                
+                if let Ok(changes) = result {
+                    if changes > 0 {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        
+        self.conn.execute("COMMIT", [])?;
+        
+        println!("Imported {} foods from USDA SR Legacy", count);
         Ok(())
     }
 
     pub fn import_csv(&self, path: &str) -> Result<()> {
-        // TODO: Implement CSV import
-        println!("CSV import from {} not yet implemented", path);
+        let mut reader = csv::Reader::from_path(path)
+            .map_err(|e| anyhow::anyhow!("Failed to open CSV file: {}", e))?;
+        
+        let mut count = 0;
+        let mut skipped = 0;
+        
+        for record in reader.records() {
+            let record = record?;
+            
+            let name = record.get(0).unwrap_or("").trim().to_string();
+            let protein: f64 = record.get(1).unwrap_or("0").parse().unwrap_or(0.0);
+            let fat: f64 = record.get(2).unwrap_or("0").parse().unwrap_or(0.0);
+            let carbs: f64 = record.get(3).unwrap_or("0").parse().unwrap_or(0.0);
+            let calories: f64 = record.get(4).unwrap_or("0").parse().unwrap_or(0.0);
+            let serving = record.get(5).unwrap_or("100g").trim().to_string();
+            
+            if name.is_empty() {
+                continue;
+            }
+            
+            let calories = if calories == 0.0 {
+                protein * 4.0 + fat * 9.0 + carbs * 4.0
+            } else {
+                calories
+            };
+            
+            let result = self.conn.execute(
+                "INSERT OR IGNORE INTO foods (name, protein, fat, carbs, calories, serving)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![name, protein, fat, carbs, calories, serving],
+            );
+            
+            match result {
+                Ok(changes) if changes > 0 => count += 1,
+                Ok(_) => skipped += 1,
+                Err(_) => skipped += 1,
+            }
+        }
+        
+        println!("Imported {} foods ({} skipped/duplicates)", count, skipped);
         Ok(())
     }
 
@@ -586,5 +738,80 @@ impl Database {
             carbs: new_carbs,
             calories: new_calories,
         })
+    }
+
+    /// Create a compound food from component foods with amounts
+    /// items: Vec<(food_name, amount_str)>
+    pub fn create_compound_food(&self, name: &str, items: &[(String, String)]) -> Result<()> {
+        // Validate all component foods exist
+        let mut resolved: Vec<(i64, String)> = Vec::new();
+        for (food_name, amount) in items {
+            let food = self.get_food_by_name(food_name)?
+                .ok_or_else(|| anyhow::anyhow!("Food not found: '{}'", food_name))?;
+            resolved.push((food.id.unwrap(), amount.clone()));
+        }
+
+        self.conn.execute(
+            "INSERT INTO compound_foods (name) VALUES (?1)",
+            params![name],
+        )?;
+        let compound_id = self.conn.last_insert_rowid();
+
+        for (food_id, amount) in &resolved {
+            self.conn.execute(
+                "INSERT INTO compound_food_items (compound_food_id, food_id, amount) VALUES (?1, ?2, ?3)",
+                params![compound_id, food_id, amount],
+            )?;
+        }
+
+        // Also create a regular food entry with the summed macros
+        let mut total = crate::food::Macros::default();
+        for (food_name, amount) in items {
+            let food = self.get_food_by_name(food_name)?.unwrap();
+            if let Some(macros) = food.calculate(amount) {
+                total.add(&macros);
+            } else {
+                // If can't calculate, use base macros
+                total.add(&crate::food::Macros {
+                    protein: food.protein,
+                    fat: food.fat,
+                    carbs: food.carbs,
+                    calories: food.calories,
+                });
+            }
+        }
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO foods (name, protein, fat, carbs, calories, serving)
+             VALUES (?1, ?2, ?3, ?4, ?5, '1serving')",
+            params![name, total.protein, total.fat, total.carbs, total.calories],
+        )?;
+
+        println!("Created compound food '{}': {:.0}p/{:.0}f/{:.0}c — {:.0} kcal",
+            name, total.protein, total.fat, total.carbs, total.calories);
+
+        Ok(())
+    }
+
+    /// List compound food details
+    #[allow(dead_code)]
+    pub fn get_compound_food(&self, name: &str) -> Result<Vec<(String, String)>> {
+        let compound_id: i64 = self.conn.query_row(
+            "SELECT id FROM compound_foods WHERE LOWER(name) = LOWER(?1)",
+            params![name],
+            |row| row.get(0),
+        )?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT f.name, ci.amount FROM compound_food_items ci
+             JOIN foods f ON ci.food_id = f.id
+             WHERE ci.compound_food_id = ?1"
+        )?;
+
+        let items = stmt.query_map(params![compound_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?.filter_map(|r| r.ok()).collect();
+
+        Ok(items)
     }
 }
