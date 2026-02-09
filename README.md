@@ -18,15 +18,21 @@ chomp bacon                      # logs bacon
 chomp ribeye 8oz                 # logs 8oz ribeye
 chomp "bare bar"                 # logs bare bar
 
-# Manage foods
+# Manage foods (the database of what things are)
 chomp add ribeye --protein 23 --fat 18 --carbs 0 --per 100g
 chomp edit ribeye --protein 25 --fat 20
-chomp delete "food name"
+chomp delete "food name"         # removes food definition from DB
+
+# Manage log entries (what you actually ate)
+chomp unlog 42                   # delete log entry by ID
+chomp unlog-last                 # delete most recent log entry
+chomp edit-log 42 --amount 8oz   # fix a log entry
 
 # Query
 chomp search salmon              # fuzzy match
 chomp today                      # show today's totals
 chomp history                    # recent logs
+chomp stats                      # database stats
 
 # Import/Export
 chomp export --csv               # for spreadsheets
