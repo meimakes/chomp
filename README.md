@@ -41,8 +41,6 @@ chomp import usda                # seed from USDA database
 - **JSON output** — All commands support `--json` for AI integration
 - **MCP server** — `chomp serve` for Claude Desktop integration
 
-## Implemented Features
-
 - **Compound foods** — `chomp compound "breakfast" -i "3 eggs + 2 bacon"` saves multi-item meals as single entry
 - **USDA import** — `chomp import usda` downloads and imports from FoodData Central SR Legacy dataset
 - **CSV import** — `chomp import csv --path foods.csv` for bulk loading (header: name,protein,fat,carbs,calories,serving)
