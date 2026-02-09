@@ -83,6 +83,14 @@ fn parse_amount_multiplier(amount: &str, serving: &str) -> Option<f64> {
     let (amount_val, amount_unit) = parse_quantity(amount)?;
     let (serving_val, serving_unit) = parse_quantity(serving)?;
     
+    // If amount is unitless (defaulted to "g") but serving is a discrete unit,
+    // treat the amount as that discrete unit instead of grams.
+    // e.g., "2" with serving "1piece" means 2 pieces, not 2 grams.
+    let discrete_units = ["bar", "bars", "piece", "pieces", "serving", "servings", "scoop", "scoops", "slice", "slices", "pack", "packs"];
+    if amount_unit == "g" && amount.trim().parse::<f64>().is_ok() && discrete_units.contains(&serving_unit.as_str()) {
+        return Some(amount_val / serving_val);
+    }
+    
     // Convert both to grams for comparison
     let amount_grams = to_grams(amount_val, &amount_unit)?;
     let serving_grams = to_grams(serving_val, &serving_unit)?;
