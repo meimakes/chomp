@@ -91,6 +91,9 @@ enum Commands {
         /// Serving size (e.g., "100g", "1 bar", "3oz")
         #[arg(long)]
         per: Option<String>,
+        /// Calories (calculated if not provided)
+        #[arg(long)]
+        calories: Option<f64>,
     },
     /// Delete a food entry
     Delete {
@@ -203,8 +206,8 @@ fn main() -> Result<()> {
                 _ => anyhow::bail!("Unknown source: {}", source),
             }
         }
-        Some(Commands::Edit { name, protein, fat, carbs, per }) => {
-            db.edit_food(&name, protein.clone(), fat.clone(), carbs.clone(), per.as_deref())?;
+        Some(Commands::Edit { name, protein, fat, carbs, per, calories }) => {
+            db.edit_food(&name, protein.clone(), fat.clone(), carbs.clone(), per.as_deref(), calories.clone())?;
             let food = db.search_food(&name)?;
             if let Some(f) = food {
                 println!("Updated: {} ({}p/{}f/{}c per {})", f.name, f.protein, f.fat, f.carbs, f.serving);
