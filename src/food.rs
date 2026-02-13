@@ -82,28 +82,34 @@ impl Macros {
 fn parse_amount_multiplier(amount: &str, serving: &str) -> Option<f64> {
     let (amount_val, amount_unit) = parse_quantity(amount)?;
     let (serving_val, serving_unit) = parse_quantity(serving)?;
-    
+
     // If amount is unitless (defaulted to "g") but serving is a discrete unit,
     // treat the amount as that discrete unit instead of grams.
     // e.g., "2" with serving "1piece" means 2 pieces, not 2 grams.
-    let discrete_units = ["bar", "bars", "piece", "pieces", "serving", "servings", "scoop", "scoops", "slice", "slices", "patty", "patties", "pack", "packs"];
-    if amount_unit == "g" && amount.trim().parse::<f64>().is_ok() && discrete_units.contains(&serving_unit.as_str()) {
+    let discrete_units = [
+        "bar", "bars", "piece", "pieces", "serving", "servings", "scoop", "scoops", "slice",
+        "slices", "patty", "patties", "pack", "packs",
+    ];
+    if amount_unit == "g"
+        && amount.trim().parse::<f64>().is_ok()
+        && discrete_units.contains(&serving_unit.as_str())
+    {
         return Some(amount_val / serving_val);
     }
-    
+
     // Convert both to grams for comparison
     let amount_grams = to_grams(amount_val, &amount_unit)?;
     let serving_grams = to_grams(serving_val, &serving_unit)?;
-    
+
     Some(amount_grams / serving_grams)
 }
 
 fn parse_quantity(s: &str) -> Option<(f64, String)> {
     let s = s.trim().to_lowercase();
-    
+
     // Split by whitespace first to handle "4 oz", "1 bar", etc.
     let parts: Vec<&str> = s.split_whitespace().collect();
-    
+
     if parts.len() == 2 {
         // "4 oz" pattern
         let num: f64 = parts[0].parse().ok()?;
@@ -135,11 +141,12 @@ fn to_grams(value: f64, unit: &str) -> Option<f64> {
         "lb" | "lbs" | "pound" | "pounds" => Some(value * 453.592),
         "kg" | "kilogram" | "kilograms" => Some(value * 1000.0),
         "ml" | "milliliter" | "milliliters" => Some(value), // Assume 1:1 for liquids
-        "cup" | "cups" => Some(value * 240.0), // Approximate
+        "cup" | "cups" => Some(value * 240.0),              // Approximate
         "tbsp" | "tablespoon" | "tablespoons" => Some(value * 15.0),
         "tsp" | "teaspoon" | "teaspoons" => Some(value * 5.0),
         // For discrete items (bar, piece, etc.), treat as 1:1 multiplier
-        "bar" | "bars" | "piece" | "pieces" | "serving" | "servings" | "scoop" | "scoops" | "slice" | "slices" | "patty" | "patties" | "pack" | "packs" => Some(value * 100.0),
+        "bar" | "bars" | "piece" | "pieces" | "serving" | "servings" | "scoop" | "scoops"
+        | "slice" | "slices" | "patty" | "patties" | "pack" | "packs" => Some(value * 100.0),
         _ => Some(value), // Unknown unit, assume grams
     }
 }
@@ -155,7 +162,10 @@ mod tests {
         assert_eq!(parse_quantity("1 bar"), Some((1.0, "bar".to_string())));
         assert_eq!(parse_quantity("4 oz"), Some((4.0, "oz".to_string())));
         assert_eq!(parse_quantity("0.5 oz"), Some((0.5, "oz".to_string())));
-        assert_eq!(parse_quantity("3 patties"), Some((3.0, "patties".to_string())));
+        assert_eq!(
+            parse_quantity("3 patties"),
+            Some((3.0, "patties".to_string()))
+        );
         assert_eq!(parse_quantity("2 packs"), Some((2.0, "packs".to_string())));
     }
 
@@ -197,8 +207,18 @@ mod tests {
 
     #[test]
     fn test_macros_add() {
-        let mut a = Macros { protein: 10.0, fat: 5.0, carbs: 20.0, calories: 165.0 };
-        let b = Macros { protein: 5.0, fat: 3.0, carbs: 10.0, calories: 87.0 };
+        let mut a = Macros {
+            protein: 10.0,
+            fat: 5.0,
+            carbs: 20.0,
+            calories: 165.0,
+        };
+        let b = Macros {
+            protein: 5.0,
+            fat: 3.0,
+            carbs: 10.0,
+            calories: 87.0,
+        };
         a.add(&b);
         assert_eq!(a.protein, 15.0);
         assert_eq!(a.calories, 252.0);

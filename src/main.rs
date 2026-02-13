@@ -140,21 +140,32 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     // Initialize database
     let db = db::Database::open()?;
     db.init()?;
 
     match cli.command {
-        Some(Commands::Add { name, protein, fat, carbs, per, calories, alias }) => {
-            let cals = calories.unwrap_or_else(|| protein * 4.0 + fat * 9.0 + carbs * 4.0);
+        Some(Commands::Add {
+            name,
+            protein,
+            fat,
+            carbs,
+            per,
+            calories,
+            alias,
+        }) => {
+            let cals = calories.unwrap_or(protein * 4.0 + fat * 9.0 + carbs * 4.0);
             let food = food::Food::new(&name, protein, fat, carbs, cals, &per, alias);
             db.add_food(&food)?;
-            
+
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&food)?);
             } else {
-                println!("Added: {} ({:.0}p/{:.0}f/{:.0}c per {})", name, protein, fat, carbs, per);
+                println!(
+                    "Added: {} ({:.0}p/{:.0}f/{:.0}c per {})",
+                    name, protein, fat, carbs, per
+                );
             }
         }
         Some(Commands::Search { query }) => {
@@ -163,8 +174,10 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&results)?);
             } else {
                 for food in results {
-                    println!("{}: {:.0}p/{:.0}f/{:.0}c per {}", 
-                        food.name, food.protein, food.fat, food.carbs, food.serving);
+                    println!(
+                        "{}: {:.0}p/{:.0}f/{:.0}c per {}",
+                        food.name, food.protein, food.fat, food.carbs, food.serving
+                    );
                 }
             }
         }
@@ -173,8 +186,10 @@ fn main() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&totals)?);
             } else {
-                println!("Today: {:.0}p / {:.0}f / {:.0}c — {:.0} kcal",
-                    totals.protein, totals.fat, totals.carbs, totals.calories);
+                println!(
+                    "Today: {:.0}p / {:.0}f / {:.0}c — {:.0} kcal",
+                    totals.protein, totals.fat, totals.carbs, totals.calories
+                );
             }
         }
         Some(Commands::History { days }) => {
@@ -183,34 +198,46 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {
                 for entry in entries {
-                    println!("{} | {} {} | {:.0}p/{:.0}f/{:.0}c",
-                        entry.date, entry.amount, entry.food_name,
-                        entry.protein, entry.fat, entry.carbs);
+                    println!(
+                        "{} | {} {} | {:.0}p/{:.0}f/{:.0}c",
+                        entry.date,
+                        entry.amount,
+                        entry.food_name,
+                        entry.protein,
+                        entry.fat,
+                        entry.carbs
+                    );
                 }
             }
         }
-        Some(Commands::Export { format }) => {
-            match format.as_str() {
-                "csv" => db.export_csv()?,
-                "json" => db.export_json()?,
-                _ => anyhow::bail!("Unknown format: {}", format),
+        Some(Commands::Export { format }) => match format.as_str() {
+            "csv" => db.export_csv()?,
+            "json" => db.export_json()?,
+            _ => anyhow::bail!("Unknown format: {}", format),
+        },
+        Some(Commands::Import { source, path }) => match source.as_str() {
+            "usda" => db.import_usda()?,
+            "csv" => {
+                let p = path.ok_or_else(|| anyhow::anyhow!("--path required for csv import"))?;
+                db.import_csv(&p)?;
             }
-        }
-        Some(Commands::Import { source, path }) => {
-            match source.as_str() {
-                "usda" => db.import_usda()?,
-                "csv" => {
-                    let p = path.ok_or_else(|| anyhow::anyhow!("--path required for csv import"))?;
-                    db.import_csv(&p)?;
-                }
-                _ => anyhow::bail!("Unknown source: {}", source),
-            }
-        }
-        Some(Commands::Edit { name, protein, fat, carbs, per, calories }) => {
-            db.edit_food(&name, protein.clone(), fat.clone(), carbs.clone(), per.as_deref(), calories.clone())?;
+            _ => anyhow::bail!("Unknown source: {}", source),
+        },
+        Some(Commands::Edit {
+            name,
+            protein,
+            fat,
+            carbs,
+            per,
+            calories,
+        }) => {
+            db.edit_food(&name, protein, fat, carbs, per.as_deref(), calories)?;
             let food = db.search_food(&name)?;
             if let Some(f) = food {
-                println!("Updated: {} ({}p/{}f/{}c per {})", f.name, f.protein, f.fat, f.carbs, f.serving);
+                println!(
+                    "Updated: {} ({}p/{}f/{}c per {})",
+                    f.name, f.protein, f.fat, f.carbs, f.serving
+                );
             }
         }
         Some(Commands::Delete { name }) => {
@@ -222,8 +249,10 @@ fn main() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entry)?);
             } else {
-                println!("Deleted log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
-                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
+                println!(
+                    "Deleted log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
+                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs
+                );
             }
         }
         Some(Commands::UnlogLast) => {
@@ -231,22 +260,33 @@ fn main() -> Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entry)?);
             } else {
-                println!("Deleted last log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
-                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
+                println!(
+                    "Deleted last log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
+                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs
+                );
             }
         }
-        Some(Commands::EditLog { id, amount, protein, fat, carbs }) => {
+        Some(Commands::EditLog {
+            id,
+            amount,
+            protein,
+            fat,
+            carbs,
+        }) => {
             let entry = db.edit_log_entry(id, amount, protein, fat, carbs)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entry)?);
             } else {
-                println!("Updated log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
-                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
+                println!(
+                    "Updated log entry: {} {} — {:.0}p/{:.0}f/{:.0}c",
+                    entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs
+                );
             }
         }
         Some(Commands::Compound { name, items }) => {
             // Parse "3 eggs + 2 bacon" format
-            let parts: Vec<(String, String)> = items.split('+')
+            let parts: Vec<(String, String)> = items
+                .split('+')
                 .map(|part| {
                     let part = part.trim();
                     let words: Vec<&str> = part.split_whitespace().collect();
@@ -279,19 +319,23 @@ fn main() -> Result<()> {
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&totals)?);
                 } else {
-                    println!("Today: {:.0}p / {:.0}f / {:.0}c — {:.0} kcal",
-                        totals.protein, totals.fat, totals.carbs, totals.calories);
+                    println!(
+                        "Today: {:.0}p / {:.0}f / {:.0}c — {:.0} kcal",
+                        totals.protein, totals.fat, totals.carbs, totals.calories
+                    );
                 }
             } else {
                 // Log the food
                 let input = cli.food.join(" ");
                 let entry = logging::parse_and_log(&db, &input)?;
-                
+
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&entry)?);
                 } else {
-                    println!("Logged: {} {} — {:.0}p/{:.0}f/{:.0}c",
-                        entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs);
+                    println!(
+                        "Logged: {} {} — {:.0}p/{:.0}f/{:.0}c",
+                        entry.amount, entry.food_name, entry.protein, entry.fat, entry.carbs
+                    );
                 }
             }
         }

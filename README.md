@@ -66,15 +66,15 @@ chomp search salmon --json       # nutrition lookup without web search
 
 ### MCP Server (for Claude Desktop)
 ```bash
-chomp serve --mcp               # starts MCP server on stdio
+chomp serve                     # starts MCP server on stdio
 ```
 
 Exposes tools:
-- `lookup_food(name)` → nutrition JSON
-- `log_food(food, amount)` → logs + returns entry
-- `get_totals(date)` → day's macros
-- `search_foods(query)` → fuzzy results
-- `add_food(name, protein, fat, carbs, per)` → add new food
+- `log_food(food)` → logs + returns entry with calculated macros
+- `search_food(query)` → fuzzy search results with nutrition info
+- `add_food(name, protein, fat, carbs, serving, ...)` → add new food to DB
+- `get_today()` → today's macro totals
+- `get_history(days)` → recent log entries
 
 ## Workflows
 
@@ -96,8 +96,6 @@ AI calls `chomp today --json` → reports totals without searching
 ## File Locations
 
 - DB: `~/.chomp/foods.db`
-- Config: `~/.chomp/config.toml`
-- Logs: `~/.chomp/logs/YYYY-MM-DD.json`
 
 ## Prior Art
 
