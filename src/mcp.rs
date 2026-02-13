@@ -82,12 +82,14 @@ fn handle_request(db: &Database, request: &JsonRpcRequest) -> JsonRpcResponse {
         "initialize" => handle_initialize(),
         "tools/list" => handle_tools_list(),
         "tools/call" => handle_tools_call(db, &request.params),
-        "notifications/initialized" => return JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: Some(Value::Null),
-            error: None,
-        },
+        "notifications/initialized" => {
+            return JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: Some(Value::Null),
+                error: None,
+            }
+        }
         _ => Err(anyhow::anyhow!("Method not found: {}", request.method)),
     };
 
@@ -224,7 +226,8 @@ fn handle_tools_call(db: &Database, params: &Value) -> Result<Value> {
 
     match tool_name {
         "log_food" => {
-            let food = arguments["food"].as_str()
+            let food = arguments["food"]
+                .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'food' argument"))?;
             let entry = parse_and_log(db, food)?;
             Ok(json!({
@@ -235,7 +238,8 @@ fn handle_tools_call(db: &Database, params: &Value) -> Result<Value> {
             }))
         }
         "search_food" => {
-            let query = arguments["query"].as_str()
+            let query = arguments["query"]
+                .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'query' argument"))?;
             let results = db.search_foods(query)?;
             Ok(json!({
@@ -246,21 +250,31 @@ fn handle_tools_call(db: &Database, params: &Value) -> Result<Value> {
             }))
         }
         "add_food" => {
-            let name = arguments["name"].as_str()
+            let name = arguments["name"]
+                .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'name' argument"))?;
-            let protein = arguments["protein"].as_f64()
+            let protein = arguments["protein"]
+                .as_f64()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'protein' argument"))?;
-            let fat = arguments["fat"].as_f64()
+            let fat = arguments["fat"]
+                .as_f64()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'fat' argument"))?;
-            let carbs = arguments["carbs"].as_f64()
+            let carbs = arguments["carbs"]
+                .as_f64()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'carbs' argument"))?;
-            let serving = arguments["serving"].as_str()
+            let serving = arguments["serving"]
+                .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'serving' argument"))?;
-            let calories = arguments["calories"].as_f64()
-                .unwrap_or_else(|| protein * 4.0 + fat * 9.0 + carbs * 4.0);
+            let calories = arguments["calories"]
+                .as_f64()
+                .unwrap_or(protein * 4.0 + fat * 9.0 + carbs * 4.0);
             let aliases: Vec<String> = arguments["aliases"]
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let food = Food::new(name, protein, fat, carbs, calories, serving, aliases);
@@ -269,7 +283,7 @@ fn handle_tools_call(db: &Database, params: &Value) -> Result<Value> {
             Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": format!("Added: {} ({:.0}p/{:.0}f/{:.0}c per {})", 
+                    "text": format!("Added: {} ({:.0}p/{:.0}f/{:.0}c per {})",
                         name, protein, fat, carbs, serving)
                 }]
             }))

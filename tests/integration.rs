@@ -7,7 +7,15 @@ fn test_full_workflow() {
     let db = Database::open_in_memory().unwrap();
 
     // Add a food
-    let food = Food::new("Ribeye", 26.0, 15.0, 0.0, 250.0, "100g", vec!["steak".to_string()]);
+    let food = Food::new(
+        "Ribeye",
+        26.0,
+        15.0,
+        0.0,
+        250.0,
+        "100g",
+        vec!["steak".to_string()],
+    );
     let food_id = db.add_food(&food).unwrap();
     assert!(food_id > 0);
 
