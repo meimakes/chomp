@@ -86,7 +86,7 @@ fn parse_amount_multiplier(amount: &str, serving: &str) -> Option<f64> {
     // If amount is unitless (defaulted to "g") but serving is a discrete unit,
     // treat the amount as that discrete unit instead of grams.
     // e.g., "2" with serving "1piece" means 2 pieces, not 2 grams.
-    let discrete_units = ["bar", "bars", "piece", "pieces", "serving", "servings", "scoop", "scoops", "slice", "slices", "pack", "packs"];
+    let discrete_units = ["bar", "bars", "piece", "pieces", "serving", "servings", "scoop", "scoops", "slice", "slices", "patty", "patties", "pack", "packs"];
     if amount_unit == "g" && amount.trim().parse::<f64>().is_ok() && discrete_units.contains(&serving_unit.as_str()) {
         return Some(amount_val / serving_val);
     }
@@ -101,16 +101,29 @@ fn parse_amount_multiplier(amount: &str, serving: &str) -> Option<f64> {
 fn parse_quantity(s: &str) -> Option<(f64, String)> {
     let s = s.trim().to_lowercase();
     
-    // Handle special cases like "1 bar", "1 piece"
-    if let Some(num_end) = s.find(|c: char| !c.is_numeric() && c != '.') {
-        let num_str = &s[..num_end];
-        let unit = s[num_end..].trim().to_string();
-        let num: f64 = num_str.parse().ok()?;
+    // Split by whitespace first to handle "4 oz", "1 bar", etc.
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    
+    if parts.len() == 2 {
+        // "4 oz" pattern
+        let num: f64 = parts[0].parse().ok()?;
+        let unit = parts[1].to_string();
         Some((num, unit))
+    } else if parts.len() == 1 {
+        // Could be "4oz" or just "4"
+        let part = parts[0];
+        if let Some(num_end) = part.find(|c: char| !c.is_numeric() && c != '.') {
+            let num_str = &part[..num_end];
+            let unit = part[num_end..].to_string();
+            let num: f64 = num_str.parse().ok()?;
+            Some((num, unit))
+        } else {
+            // Just a number, assume grams
+            let num: f64 = part.parse().ok()?;
+            Some((num, "g".to_string()))
+        }
     } else {
-        // Just a number, assume grams
-        let num: f64 = s.parse().ok()?;
-        Some((num, "g".to_string()))
+        None
     }
 }
 
@@ -126,7 +139,7 @@ fn to_grams(value: f64, unit: &str) -> Option<f64> {
         "tbsp" | "tablespoon" | "tablespoons" => Some(value * 15.0),
         "tsp" | "teaspoon" | "teaspoons" => Some(value * 5.0),
         // For discrete items (bar, piece, etc.), treat as 1:1 multiplier
-        "bar" | "bars" | "piece" | "pieces" | "serving" | "servings" | "scoop" | "scoops" => Some(value * 100.0),
+        "bar" | "bars" | "piece" | "pieces" | "serving" | "servings" | "scoop" | "scoops" | "slice" | "slices" | "patty" | "patties" | "pack" | "packs" => Some(value * 100.0),
         _ => Some(value), // Unknown unit, assume grams
     }
 }
@@ -140,6 +153,10 @@ mod tests {
         assert_eq!(parse_quantity("100g"), Some((100.0, "g".to_string())));
         assert_eq!(parse_quantity("8oz"), Some((8.0, "oz".to_string())));
         assert_eq!(parse_quantity("1 bar"), Some((1.0, "bar".to_string())));
+        assert_eq!(parse_quantity("4 oz"), Some((4.0, "oz".to_string())));
+        assert_eq!(parse_quantity("0.5 oz"), Some((0.5, "oz".to_string())));
+        assert_eq!(parse_quantity("3 patties"), Some((3.0, "patties".to_string())));
+        assert_eq!(parse_quantity("2 packs"), Some((2.0, "packs".to_string())));
     }
 
     #[test]

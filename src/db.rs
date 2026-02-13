@@ -336,7 +336,8 @@ impl Database {
         protein: Option<f64>, 
         fat: Option<f64>, 
         carbs: Option<f64>, 
-        serving: Option<&str>
+        serving: Option<&str>,
+        calories: Option<f64>
     ) -> Result<()> {
         // Get the current food
         let food = self.get_food_by_name(name)?
@@ -363,11 +364,15 @@ impl Database {
             params_vec.push(Box::new(s.to_string()));
         }
         
-        // Calculate new calories if macros changed
+        // Calculate new calories if macros changed or calories provided
         let new_protein = protein.unwrap_or(food.protein);
         let new_fat = fat.unwrap_or(food.fat);
         let new_carbs = carbs.unwrap_or(food.carbs);
-        let new_calories = (new_protein * 4.0) + (new_fat * 9.0) + (new_carbs * 4.0);
+        let new_calories = if let Some(c) = calories {
+            c
+        } else {
+            (new_protein * 4.0) + (new_fat * 9.0) + (new_carbs * 4.0)
+        };
         
         updates.push("calories = ?");
         params_vec.push(Box::new(new_calories));
@@ -913,7 +918,7 @@ mod tests {
         let db = test_db();
         db.add_food(&sample_food("Salmon")).unwrap();
 
-        db.edit_food("Salmon", Some(25.0), None, None, None).unwrap();
+        db.edit_food("Salmon", Some(25.0), None, None, None, None).unwrap();
         let food = db.get_food_by_name("Salmon").unwrap().unwrap();
         assert_eq!(food.protein, 25.0);
         // calories recalculated: 25*4 + 15*9 + 0*4 = 235

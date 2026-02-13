@@ -70,7 +70,14 @@ fn parse_input(input: &str) -> (String, Option<String>) {
         return (food_name, Some(last.to_string()));
     }
     
-    // Pattern: "2 eggs" (number at start)
+    // Pattern: "3 oz milk" (number then unit then food)
+    if words.len() >= 3 && is_number(words[0]) && is_unit(words[1]) {
+        let amount = format!("{}{}", words[0], words[1]);
+        let food_name = words[2..].join(" ");
+        return (food_name, Some(amount));
+    }
+    
+    // Pattern: "2 eggs" (number at start, but second word is not a recognized unit)
     if is_number(words[0]) && words.len() >= 2 {
         let amount = words[0].to_string();
         let food_name = words[1..].join(" ");
@@ -101,6 +108,8 @@ fn is_unit(s: &str) -> bool {
         "serving", "servings",
         "scoop", "scoops",
         "slice", "slices",
+        "patty", "patties",
+        "pack", "packs",
     ];
     units.contains(&s.to_lowercase().as_str())
 }
@@ -151,9 +160,9 @@ mod tests {
     #[test]
     fn test_parse_input_number_first() {
         let (name, amount) = parse_input("3 slices pizza");
-        // "3" is number, so name="slices pizza", amount=Some("3")
-        assert_eq!(amount, Some("3".to_string()));
-        assert_eq!(name, "slices pizza");
+        // "3 slices" is number+unit, so name="pizza", amount=Some("3slices")
+        assert_eq!(amount, Some("3slices".to_string()));
+        assert_eq!(name, "pizza");
     }
 
     #[test]
@@ -161,5 +170,20 @@ mod tests {
         let (name, amount) = parse_input("chicken breast 6 oz");
         assert_eq!(name, "chicken breast");
         assert_eq!(amount, Some("6 oz".to_string()));
+    }
+
+    #[test]
+    fn test_parse_input_fractional_amount() {
+        let (name, amount) = parse_input("3 oz milk");
+        assert_eq!(name, "milk");
+        assert_eq!(amount, Some("3oz".to_string()));
+        
+        let (name, amount) = parse_input("0.5 oz aged gouda");
+        assert_eq!(name, "aged gouda");
+        assert_eq!(amount, Some("0.5oz".to_string()));
+        
+        let (name, amount) = parse_input("0.5 bare bar");
+        assert_eq!(name, "bare bar");
+        assert_eq!(amount, Some("0.5".to_string()));
     }
 }
