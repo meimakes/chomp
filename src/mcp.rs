@@ -11,89 +11,49 @@ const SERVER_NAME: &str = "chomp";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Deserialize)]
-struct JsonRpcRequest {
+pub struct JsonRpcRequest {
     #[allow(dead_code)]
-    jsonrpc: String,
-    id: Option<Value>,
-    method: String,
+    pub jsonrpc: String,
+    pub id: Option<Value>,
+    pub method: String,
     #[serde(default)]
-    params: Value,
+    pub params: Value,
 }
 
 #[derive(Debug, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Value,
+pub struct JsonRpcResponse {
+    pub jsonrpc: String,
+    pub id: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
+    pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
+    pub error: Option<JsonRpcError>,
 }
 
 #[derive(Debug, Serialize)]
-struct JsonRpcError {
-    code: i32,
-    message: String,
+pub struct JsonRpcError {
+    pub code: i32,
+    pub message: String,
 }
 
-pub fn serve() -> Result<()> {
-    let db = Database::open()?;
-    db.init()?;
-
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let request: JsonRpcRequest = match serde_json::from_str(&line) {
-            Ok(r) => r,
-            Err(e) => {
-                let response = JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: Value::Null,
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: -32700,
-                        message: format!("Parse error: {}", e),
-                    }),
-                };
-                writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
-                stdout.flush()?;
-                continue;
-            }
-        };
-
-        let response = handle_request(&db, &request);
-        writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
-        stdout.flush()?;
-    }
-
-    Ok(())
-}
-
-fn handle_request(db: &Database, request: &JsonRpcRequest) -> JsonRpcResponse {
-    let id = request.id.clone().unwrap_or(Value::Null);
+/// Handle a JSON-RPC request and return a response.
+/// Returns None for notifications (no id) that don't need a response.
+pub fn handle_request(db: &Database, request: &JsonRpcRequest) -> Option<JsonRpcResponse> {
+    // Per JSON-RPC 2.0 spec, requests without an id are notifications
+    // and MUST NOT receive a response.
+    let id = match &request.id {
+        Some(id) => id.clone(),
+        None => return None,
+    };
 
     let result = match request.method.as_str() {
         "initialize" => handle_initialize(),
         "tools/list" => handle_tools_list(),
         "tools/call" => handle_tools_call(db, &request.params),
-        "notifications/initialized" => {
-            return JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id,
-                result: Some(Value::Null),
-                error: None,
-            }
-        }
         _ => Err(anyhow::anyhow!("Method not found: {}", request.method)),
     };
 
-    match result {
+    Some(match result {
         Ok(value) => JsonRpcResponse {
             jsonrpc: "2.0".to_string(),
             id,
@@ -109,7 +69,51 @@ fn handle_request(db: &Database, request: &JsonRpcRequest) -> JsonRpcResponse {
                 message: e.to_string(),
             }),
         },
+    })
+}
+
+/// Parse a JSON line into a request, returning an error response on failure.
+pub fn parse_request(line: &str) -> std::result::Result<JsonRpcRequest, JsonRpcResponse> {
+    serde_json::from_str(line).map_err(|e| JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: Value::Null,
+        result: None,
+        error: Some(JsonRpcError {
+            code: -32700,
+            message: format!("Parse error: {}", e),
+        }),
+    })
+}
+
+/// Run the MCP server over stdio transport.
+pub fn serve_stdio() -> Result<()> {
+    let db = Database::open()?;
+    db.init()?;
+
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match parse_request(&line) {
+            Ok(request) => {
+                if let Some(response) = handle_request(&db, &request) {
+                    writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
+                    stdout.flush()?;
+                }
+            }
+            Err(error_response) => {
+                writeln!(stdout, "{}", serde_json::to_string(&error_response)?)?;
+                stdout.flush()?;
+            }
+        }
     }
+
+    Ok(())
 }
 
 fn handle_initialize() -> Result<Value> {
