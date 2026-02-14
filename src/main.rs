@@ -320,7 +320,11 @@ fn main() -> Result<()> {
             println!("First entry: {}", stats.first_entry.unwrap_or_default());
             println!("Last entry: {}", stats.last_entry.unwrap_or_default());
         }
-        Some(Commands::Serve { transport, port, host }) => {
+        Some(Commands::Serve {
+            transport,
+            port,
+            host,
+        }) => {
             match transport.as_str() {
                 "stdio" => mcp::serve_stdio()?,
                 #[cfg(feature = "sse")]

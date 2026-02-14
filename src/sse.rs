@@ -75,9 +75,7 @@ async fn sse_handler(
     // Send the endpoint event so the client knows where to POST
     let endpoint_url = format!("/message?sessionId={}", session_id);
     let _ = tx
-        .send(Ok(Event::default()
-            .event("endpoint")
-            .data(endpoint_url)))
+        .send(Ok(Event::default().event("endpoint").data(endpoint_url)))
         .await;
 
     // Store session
