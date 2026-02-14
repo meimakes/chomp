@@ -64,9 +64,37 @@ chomp "salmon 4oz" --json        # log + structured output
 chomp search salmon --json       # nutrition lookup without web search
 ```
 
-### MCP Server (for Claude Desktop)
+### MCP Server
 ```bash
-chomp serve                     # starts MCP server on stdio
+# stdio transport (Claude Desktop)
+chomp serve                          # default: stdio
+chomp serve --transport stdio
+
+# SSE transport (Poke.com, remote agents)
+chomp serve --transport sse          # default: http://127.0.0.1:3000
+chomp serve --transport sse --port 3456 --host 0.0.0.0
+
+# Both transports simultaneously
+chomp serve --transport both --port 3000
+```
+
+**Transport options:**
+
+| Transport | Use case | Endpoint |
+|-----------|----------|----------|
+| `stdio` | Claude Desktop, local AI | stdin/stdout |
+| `sse` | Poke.com, Railway, remote | `GET /sse` + `POST /message` |
+| `both` | Run both simultaneously | stdio + HTTP |
+
+**SSE endpoints:**
+- `GET /sse` — SSE event stream (returns `endpoint` event with session POST URL)
+- `POST /message?sessionId=<id>` — send JSON-RPC requests
+- `GET /health` — health check
+
+**Environment variables (SSE mode):**
+```bash
+CHOMP_PORT=3000          # default: 3000
+CHOMP_HOST=0.0.0.0       # default: 127.0.0.1
 ```
 
 Exposes tools:

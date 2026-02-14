@@ -5,6 +5,8 @@ mod db;
 mod food;
 mod logging;
 mod mcp;
+#[cfg(feature = "sse")]
+mod sse;
 
 #[derive(Parser)]
 #[command(name = "chomp")]
@@ -135,7 +137,17 @@ enum Commands {
     /// Show database stats
     Stats,
     /// Start MCP server (for AI assistants like Claude Desktop)
-    Serve,
+    Serve {
+        /// Transport mode: stdio, sse, or both
+        #[arg(long, default_value = "stdio")]
+        transport: String,
+        /// Port for SSE server (env: CHOMP_PORT)
+        #[arg(long, default_value_t = 3000, env = "CHOMP_PORT")]
+        port: u16,
+        /// Host for SSE server (env: CHOMP_HOST)
+        #[arg(long, default_value = "127.0.0.1", env = "CHOMP_HOST")]
+        host: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -308,8 +320,33 @@ fn main() -> Result<()> {
             println!("First entry: {}", stats.first_entry.unwrap_or_default());
             println!("Last entry: {}", stats.last_entry.unwrap_or_default());
         }
-        Some(Commands::Serve) => {
-            mcp::serve()?;
+        Some(Commands::Serve { transport, port, host }) => {
+            match transport.as_str() {
+                "stdio" => mcp::serve_stdio()?,
+                #[cfg(feature = "sse")]
+                "sse" => {
+                    let rt = tokio::runtime::Runtime::new()?;
+                    rt.block_on(sse::serve_sse(port, &host))?;
+                }
+                #[cfg(feature = "sse")]
+                "both" => {
+                    // Run SSE in a background thread, stdio on main
+                    let host_clone = host.clone();
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                        rt.block_on(sse::serve_sse(port, &host_clone))
+                            .expect("SSE server failed");
+                    });
+                    // Small delay to let SSE server start
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    mcp::serve_stdio()?;
+                }
+                #[cfg(not(feature = "sse"))]
+                "sse" | "both" => {
+                    anyhow::bail!("SSE transport requires the 'sse' feature. Rebuild with: cargo build --features sse");
+                }
+                _ => anyhow::bail!("Invalid transport: {}. Use stdio, sse, or both.", transport),
+            }
         }
         None => {
             // Default action: log food
