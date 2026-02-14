@@ -79,15 +79,20 @@ async fn sse_handler(
         .await;
 
     // Store session
+    let tx_clone = tx.clone();
     state.sessions.lock().await.insert(session_id.clone(), tx);
 
-    // Clean up on disconnect (when rx is dropped, the stream ends)
+    // Clean up on disconnect: periodically check if the sender's receiver is gone
     let state_clone = state.clone();
     let sid = session_id.clone();
     tokio::spawn(async move {
-        // Wait until the receiver is dropped (client disconnected)
-        tokio::time::sleep(tokio::time::Duration::from_secs(86400)).await;
-        state_clone.sessions.lock().await.remove(&sid);
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            if tx_clone.is_closed() {
+                state_clone.sessions.lock().await.remove(&sid);
+                break;
+            }
+        }
     });
 
     Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
@@ -99,8 +104,13 @@ async fn message_handler(
     Query(query): Query<MessageQuery>,
     Json(request): Json<JsonRpcRequest>,
 ) -> StatusCode {
-    let sessions = state.sessions.lock().await;
+    // Lazy cleanup: check if session is dead before processing
+    let mut sessions = state.sessions.lock().await;
     let tx = match sessions.get(&query.session_id) {
+        Some(tx) if tx.is_closed() => {
+            sessions.remove(&query.session_id);
+            return StatusCode::NOT_FOUND;
+        }
         Some(tx) => tx.clone(),
         None => return StatusCode::NOT_FOUND,
     };
@@ -112,17 +122,26 @@ async fn message_handler(
         Ok(db)
     }) {
         Ok(db) => db,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+        Err(err) => {
+            eprintln!("Database error in message_handler: {}", err);
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
     };
 
     if let Some(response) = mcp::handle_request(&db, &request) {
         let json = match serde_json::to_string(&response) {
             Ok(j) => j,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+            Err(e) => {
+                eprintln!("Failed to serialize JSON-RPC response: {e}");
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
         };
 
         let event = Event::default().event("message").data(json);
-        let _ = tx.send(Ok(event)).await;
+        if tx.send(Ok(event)).await.is_err() {
+            eprintln!("SSE client disconnected, could not deliver response");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
 
     StatusCode::ACCEPTED

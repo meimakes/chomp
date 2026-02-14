@@ -336,13 +336,19 @@ fn main() -> Result<()> {
                 "both" => {
                     // Run SSE in a background thread, stdio on main
                     let host_clone = host.clone();
-                    std::thread::spawn(move || {
+                    let sse_handle = std::thread::spawn(move || {
                         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                         rt.block_on(sse::serve_sse(port, &host_clone))
-                            .expect("SSE server failed");
                     });
-                    // Small delay to let SSE server start
+                    // Brief startup window — check if SSE died immediately
                     std::thread::sleep(std::time::Duration::from_millis(100));
+                    if sse_handle.is_finished() {
+                        match sse_handle.join() {
+                            Ok(Err(e)) => anyhow::bail!("SSE server failed to start: {}", e),
+                            Err(_) => anyhow::bail!("SSE server thread panicked"),
+                            Ok(Ok(())) => anyhow::bail!("SSE server exited unexpectedly"),
+                        }
+                    }
                     mcp::serve_stdio()?;
                 }
                 #[cfg(not(feature = "sse"))]

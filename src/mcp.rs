@@ -39,23 +39,17 @@ pub struct JsonRpcError {
 /// Handle a JSON-RPC request and return a response.
 /// Returns None for notifications (no id) that don't need a response.
 pub fn handle_request(db: &Database, request: &JsonRpcRequest) -> Option<JsonRpcResponse> {
+    // Per JSON-RPC 2.0 spec, requests without an id are notifications
+    // and MUST NOT receive a response.
     let id = match &request.id {
         Some(id) => id.clone(),
-        None => {
-            // Notifications like "notifications/initialized" have no id
-            // Per JSON-RPC 2.0 spec, notifications MUST NOT be replied to
-            if request.method == "notifications/initialized" {
-                return None;
-            }
-            Value::Null
-        }
+        None => return None,
     };
 
     let result = match request.method.as_str() {
         "initialize" => handle_initialize(),
         "tools/list" => handle_tools_list(),
         "tools/call" => handle_tools_call(db, &request.params),
-        "notifications/initialized" => return None,
         _ => Err(anyhow::anyhow!("Method not found: {}", request.method)),
     };
 
