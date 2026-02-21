@@ -2,6 +2,9 @@
 
 Local food database CLI for AI-assisted nutrition tracking.
 
+Built by [@meimakes](https://x.com/meimakes)
+
+
 ## Problem
 
 AI assistants waste credits searching for nutrition data every time you log food. Your diet is repetitive — the same foods show up constantly. Why look up "ribeye" for the 50th time?
