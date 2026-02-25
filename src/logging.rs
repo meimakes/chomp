@@ -98,6 +98,13 @@ fn parse_input(input: &str) -> (String, Option<String>) {
         return (food_name, Some(amount));
     }
 
+    // Pattern: "Ortiz Sardines 0.5" (bare number at end, no unit)
+    if is_number(last) && words.len() >= 2 {
+        let amount = last.to_string();
+        let food_name = words[..words.len() - 1].join(" ");
+        return (food_name, Some(amount));
+    }
+
     // No amount found, entire input is food name
     (input.to_string(), None)
 }
@@ -221,6 +228,17 @@ mod tests {
         let (name, amount) = parse_input("chicken breast 6 oz");
         assert_eq!(name, "chicken breast");
         assert_eq!(amount, Some("6 oz".to_string()));
+    }
+
+    #[test]
+    fn test_parse_input_bare_number_at_end() {
+        let (name, amount) = parse_input("Ortiz Sardines 0.5");
+        assert_eq!(name, "Ortiz Sardines");
+        assert_eq!(amount, Some("0.5".to_string()));
+
+        let (name, amount) = parse_input("eggs 3");
+        assert_eq!(name, "eggs");
+        assert_eq!(amount, Some("3".to_string()));
     }
 
     #[test]
