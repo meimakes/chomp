@@ -17,9 +17,10 @@ Local SQLite database that learns YOUR foods. AI queries it instead of web searc
 
 ```bash
 # Log food (default action)
-chomp bacon                      # logs bacon
+chomp bacon                      # logs bacon (1 serving)
 chomp ribeye 8oz                 # logs 8oz ribeye
 chomp "bare bar"                 # logs bare bar
+chomp "Ortiz Sardines" 0.5       # logs half a serving (bare number = serving multiplier)
 
 # Manage foods (the database of what things are)
 chomp add ribeye --protein 23 --fat 18 --carbs 0 --per 100g
@@ -46,6 +47,7 @@ chomp import usda                # seed from USDA database
 
 - **Fuzzy matching** — "rib eye" = "ribeye"
 - **Learned portions** — "salmon" defaults to your usual 4oz (via `default_amount` field)
+- **Flexible amounts** — bare numbers are serving multipliers (`0.5` of a `4oz` serving = 2oz), units work too (`8oz`, `3 tbsp`)
 - **Aliases** — "bb" = "bare bar"
 - **JSON output** — All commands support `--json` for AI integration
 - **MCP server** — `chomp serve` for Claude Desktop integration
