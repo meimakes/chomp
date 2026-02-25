@@ -83,18 +83,14 @@ fn parse_amount_multiplier(amount: &str, serving: &str) -> Option<f64> {
     let (amount_val, amount_unit) = parse_quantity(amount)?;
     let (serving_val, serving_unit) = parse_quantity(serving)?;
 
-    // If amount is unitless (defaulted to "g") but serving is a discrete unit,
-    // treat the amount as that discrete unit instead of grams.
-    // e.g., "2" with serving "1piece" means 2 pieces, not 2 grams.
-    let discrete_units = [
-        "bar", "bars", "piece", "pieces", "serving", "servings", "scoop", "scoops", "slice",
-        "slices", "patty", "patties", "pack", "packs",
-    ];
+    // If amount is unitless (defaulted to "g") and user typed a bare number,
+    // treat it as a serving count unless the serving itself is in grams.
+    // e.g., "0.5" with serving "4oz" means half a serving, not 0.5g.
     if amount_unit == "g"
         && amount.trim().parse::<f64>().is_ok()
-        && discrete_units.contains(&serving_unit.as_str())
+        && !matches!(serving_unit.as_str(), "g" | "gram" | "grams")
     {
-        return Some(amount_val / serving_val);
+        return Some(amount_val);
     }
 
     // Convert both to grams for comparison
@@ -203,6 +199,43 @@ mod tests {
         let food = Food::new("Bare Bar", 20.0, 7.0, 22.0, 210.0, "1bar", vec![]);
         let m = food.calculate("1bar").unwrap();
         assert!((m.calories - 210.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_calculate_bare_number_with_oz_serving() {
+        // "0.5" with serving "4oz" = half a serving
+        let food = Food::new("Pork Loin", 26.0, 6.5, 0.0, 163.0, "4oz", vec![]);
+        let m = food.calculate("0.5").unwrap();
+        assert!((m.protein - 13.0).abs() < 0.01);
+        assert!((m.fat - 3.25).abs() < 0.01);
+        assert!((m.calories - 81.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_calculate_bare_number_with_discrete_serving() {
+        // "1" with serving "1 stick" = 1 serving
+        let food = Food::new("Mozz Stick", 7.0, 6.0, 0.0, 80.0, "1 stick", vec![]);
+        let m = food.calculate("1").unwrap();
+        assert!((m.protein - 7.0).abs() < 0.01);
+        assert!((m.calories - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_calculate_bare_number_with_tbsp_serving() {
+        // "3.33" with serving "1tbsp" = 3.33 servings
+        let food = Food::new("Heavy Cream", 0.0, 4.5, 0.0, 40.0, "1tbsp", vec![]);
+        let m = food.calculate("3.33").unwrap();
+        assert!((m.fat - 14.985).abs() < 0.01);
+        assert!((m.calories - 133.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_calculate_bare_number_with_gram_serving_still_uses_grams() {
+        // "200" with serving "100g" should still be 200g / 100g = 2x (not 200 servings)
+        let food = Food::new("Rice", 2.7, 0.3, 28.0, 130.0, "100g", vec![]);
+        let m = food.calculate("200").unwrap();
+        assert!((m.protein - 5.4).abs() < 0.01);
+        assert!((m.calories - 260.0).abs() < 0.01);
     }
 
     #[test]
