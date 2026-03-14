@@ -219,6 +219,106 @@ fn handle_tools_list() -> Result<Value> {
                         }
                     }
                 }
+            },
+            {
+                "name": "unlog",
+                "description": "Delete a log entry by its ID (rowid from the log table).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Log entry ID to delete"
+                        }
+                    },
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "unlog_last",
+                "description": "Delete the most recent log entry.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "delete_food",
+                "description": "Delete a food from the database by name.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Food name to delete"
+                        }
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "edit_food",
+                "description": "Edit a food entry. Only provided fields are updated.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Food name to edit"
+                        },
+                        "protein": {
+                            "type": "number",
+                            "description": "New protein in grams per serving"
+                        },
+                        "fat": {
+                            "type": "number",
+                            "description": "New fat in grams per serving"
+                        },
+                        "carbs": {
+                            "type": "number",
+                            "description": "New carbs in grams per serving"
+                        },
+                        "serving": {
+                            "type": "string",
+                            "description": "New serving size"
+                        },
+                        "calories": {
+                            "type": "number",
+                            "description": "New calories (recalculated from macros if not provided)"
+                        }
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "edit_log",
+                "description": "Edit a log entry. Only provided fields are updated.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Log entry ID to edit"
+                        },
+                        "amount": {
+                            "type": "string",
+                            "description": "New amount"
+                        },
+                        "protein": {
+                            "type": "number",
+                            "description": "New protein in grams"
+                        },
+                        "fat": {
+                            "type": "number",
+                            "description": "New fat in grams"
+                        },
+                        "carbs": {
+                            "type": "number",
+                            "description": "New carbs in grams"
+                        }
+                    },
+                    "required": ["id"]
+                }
             }
         ]
     }))
@@ -308,6 +408,72 @@ fn handle_tools_call(db: &Database, params: &Value) -> Result<Value> {
                 "content": [{
                     "type": "text",
                     "text": serde_json::to_string_pretty(&entries)?
+                }]
+            }))
+        }
+        "unlog" => {
+            let id = arguments["id"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'id' argument"))?;
+            let entry = db.delete_log_entry(id)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Deleted log entry: {} {} of {}", entry.id.unwrap_or(id), entry.amount, entry.food_name)
+                }]
+            }))
+        }
+        "unlog_last" => {
+            let entry = db.delete_last_log_entry()?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Deleted last log entry: {} {} of {}", entry.id.unwrap_or(0), entry.amount, entry.food_name)
+                }]
+            }))
+        }
+        "delete_food" => {
+            let name = arguments["name"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'name' argument"))?;
+            db.delete_food(name)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Deleted food: {}", name)
+                }]
+            }))
+        }
+        "edit_food" => {
+            let name = arguments["name"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'name' argument"))?;
+            let protein = arguments["protein"].as_f64();
+            let fat = arguments["fat"].as_f64();
+            let carbs = arguments["carbs"].as_f64();
+            let serving = arguments["serving"].as_str();
+            let calories = arguments["calories"].as_f64();
+            db.edit_food(name, protein, fat, carbs, serving, calories)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Updated food: {}", name)
+                }]
+            }))
+        }
+        "edit_log" => {
+            let id = arguments["id"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'id' argument"))?;
+            let amount = arguments["amount"].as_str().map(String::from);
+            let protein = arguments["protein"].as_f64();
+            let fat = arguments["fat"].as_f64();
+            let carbs = arguments["carbs"].as_f64();
+            let entry = db.edit_log_entry(id, amount, protein, fat, carbs)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&entry)?
                 }]
             }))
         }
