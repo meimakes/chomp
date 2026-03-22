@@ -14,6 +14,7 @@ COPY --from=builder /app/dashboard.html /app/dashboard.html
 
 ENV CHOMP_PORT=3000
 ENV CHOMP_HOST=0.0.0.0
+ENV CHOMP_DB_PATH=/data/foods.db
 EXPOSE 3000
 
 CMD ["chomp", "serve", "--transport", "sse", "--port", "3000", "--host", "0.0.0.0"]

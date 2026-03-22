@@ -55,6 +55,10 @@ impl Database {
     }
 
     fn db_path() -> Result<std::path::PathBuf> {
+        // Allow override via CHOMP_DB_PATH (for Railway/Docker deployments)
+        if let Ok(path) = std::env::var("CHOMP_DB_PATH") {
+            return Ok(std::path::PathBuf::from(path));
+        }
         let home =
             dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
         Ok(home.join(".chomp").join("foods.db"))
