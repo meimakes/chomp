@@ -20,7 +20,7 @@ fn test_full_workflow() {
     assert!(food_id > 0);
 
     // Log it via parse_and_log
-    let entry = parse_and_log(&db, "ribeye 8oz").unwrap();
+    let entry = parse_and_log(&db, "ribeye 8oz", None).unwrap();
     assert_eq!(entry.food_name, "Ribeye");
     assert!(entry.calories > 0.0);
 
@@ -35,7 +35,7 @@ fn test_full_workflow() {
     assert_eq!(history[0].food_name, "Ribeye");
 
     // Log via alias
-    let entry2 = parse_and_log(&db, "steak 200g").unwrap();
+    let entry2 = parse_and_log(&db, "steak 200g", None).unwrap();
     assert_eq!(entry2.food_name, "Ribeye");
 
     // Totals should have both
@@ -46,6 +46,6 @@ fn test_full_workflow() {
 #[test]
 fn test_food_not_found() {
     let db = Database::open_in_memory().unwrap();
-    let result = parse_and_log(&db, "nonexistent 100g");
+    let result = parse_and_log(&db, "nonexistent 100g", None);
     assert!(result.is_err());
 }

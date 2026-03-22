@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chomp Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
+    --text: #e4e4e7; --muted: #8b8d97; --accent: #818cf8;
+    --green: #34d399; --red: #f87171; --amber: #fbbf24; --blue: #60a5fa;
+    --pink: #f472b6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 0.9rem; }
+  .grid { display: grid; gap: 16px; margin-bottom: 24px; }
+  .grid-4 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .card h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 8px; }
+  .card .value { font-size: 1.8rem; font-weight: 700; }
+  .card .detail { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+  .chart-card { padding: 16px; }
+  .chart-card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
+  canvas { width: 100% !important; }
+  .target-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.85rem; }
+  .target-bar .bar-bg { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .target-bar .bar-fill { height: 100%; border-radius: 4px; }
+  .food-list { list-style: none; }
+  .food-list li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+  .food-list li:last-child { border: none; }
+  .food-list .count { color: var(--accent); font-weight: 600; }
+  .hit { color: var(--green); } .miss { color: var(--red); }
+  .loading { text-align: center; padding: 40px; color: var(--muted); }
+  @media (max-width: 640px) { body { padding: 12px; } .card .value { font-size: 1.4rem; } }
+</style>
+</head>
+<body>
+<h1>🍖 Chomp Dashboard</h1>
+<p class="subtitle" id="dateRange">Loading...</p>
+
+<div class="grid grid-4" id="summary-cards"><div class="loading">Loading data...</div></div>
+<div class="grid grid-2">
+  <div class="card chart-card"><h2>Daily Calories & Protein</h2><canvas id="chartMain"></canvas></div>
+  <div class="card chart-card"><h2>Daily Fat & Carbs</h2><canvas id="chartMacros"></canvas></div>
+</div>
+<div class="grid grid-2" style="margin-top:16px">
+  <div class="card" id="targets"></div>
+  <div class="card" id="topFoods"><h2 style="font-size:1rem;font-weight:600;margin-bottom:12px">Top Foods by Frequency</h2><ul class="food-list" id="foodList"></ul></div>
+</div>
+<div class="grid grid-2" style="margin-top:16px">
+  <div class="card chart-card"><h2>Day-of-Week Avg Calories</h2><canvas id="chartDow"></canvas></div>
+  <div class="card chart-card"><h2>Day-of-Week Avg Protein</h2><canvas id="chartDowP"></canvas></div>
+</div>
+
+<script>
+async function loadDashboard() {
+  const resp = await fetch('/api/export');
+  const csvText = await resp.text();
+
+  const rows = csvText.trim().split('\n').slice(1).map(line => {
+    const [date, food, amount, protein, fat, carbs, calories] = line.split(',');
+    return { date, food: food.trim().toLowerCase(), protein: +protein, fat: +fat, carbs: +carbs, calories: +calories };
+  }).filter(r => r.date && !isNaN(r.calories));
+
+  if (rows.length === 0) {
+    document.getElementById('summary-cards').innerHTML = '<div class="card"><h3>No Data</h3><div class="value">—</div><div class="detail">Log some food first!</div></div>';
+    return;
+  }
+
+  // Aggregate by day
+  const daily = {};
+  rows.forEach(r => {
+    if (!daily[r.date]) daily[r.date] = { protein: 0, fat: 0, carbs: 0, calories: 0 };
+    daily[r.date].protein += r.protein;
+    daily[r.date].fat += r.fat;
+    daily[r.date].carbs += r.carbs;
+    daily[r.date].calories += r.calories;
+  });
+  const dates = Object.keys(daily).sort();
+  const days = dates.map(d => daily[d]);
+  const n = dates.length;
+
+  // Date range
+  document.getElementById('dateRange').textContent = `${dates[0]} – ${dates[n-1]} (${n} days)`;
+
+  // Averages
+  const avg = k => (days.reduce((s, d) => s + d[k], 0) / n).toFixed(0);
+  const avgCal = avg('calories'), avgP = avg('protein'), avgF = avg('fat'), avgC = avg('carbs');
+
+  // Summary cards
+  const proteinHit = days.filter(d => d.protein >= 100).length;
+  const calHit = days.filter(d => d.calories < 1300).length;
+  document.getElementById('summary-cards').innerHTML = `
+    <div class="card"><h3>Avg Calories</h3><div class="value">${avgCal}</div><div class="detail">per day</div></div>
+    <div class="card"><h3>Avg Protein</h3><div class="value" style="color:var(--accent)">${avgP}g</div><div class="detail">target: 100g</div></div>
+    <div class="card"><h3>Protein Days Hit</h3><div class="value ${proteinHit/n>.5?'hit':'miss'}">${proteinHit}/${n}</div><div class="detail">${(proteinHit/n*100).toFixed(0)}% of days ≥ 100g</div></div>
+    <div class="card"><h3>Calorie Days Hit</h3><div class="value ${calHit/n>.5?'hit':'miss'}">${calHit}/${n}</div><div class="detail">${(calHit/n*100).toFixed(0)}% of days < 1300</div></div>
+  `;
+
+  // Targets section
+  const last14 = dates.slice(-14);
+  const targetHTML = `<h2 style="font-size:1rem;font-weight:600;margin-bottom:16px">Target Tracking (last 14 days)</h2>` +
+    last14.map(d => {
+      const day = daily[d];
+      const pPct = Math.min(day.protein / 100 * 100, 100);
+      const pColor = day.protein >= 100 ? 'var(--green)' : 'var(--red)';
+      const cPct = Math.min(day.calories / 1300 * 100, 100);
+      const cColor = day.calories < 1300 ? 'var(--green)' : 'var(--red)';
+      const label = d.slice(5);
+      return `<div class="target-bar"><span style="width:48px">${label}</span><span style="width:50px;font-size:0.75rem;color:var(--muted)">P:${day.protein.toFixed(0)}g</span><div class="bar-bg"><div class="bar-fill" style="width:${pPct}%;background:${pColor}"></div></div><span style="width:55px;font-size:0.75rem;color:var(--muted)">C:${day.calories.toFixed(0)}</span><div class="bar-bg"><div class="bar-fill" style="width:${cPct}%;background:${cColor}"></div></div></div>`;
+    }).join('');
+  document.getElementById('targets').innerHTML = targetHTML;
+
+  // Top foods
+  const foodCount = {};
+  rows.forEach(r => { foodCount[r.food] = (foodCount[r.food] || 0) + 1; });
+  const topFoods = Object.entries(foodCount).sort((a,b) => b[1]-a[1]).slice(0, 12);
+  document.getElementById('foodList').innerHTML = topFoods.map(([f,c]) => `<li><span>${f}</span><span class="count">${c}×</span></li>`).join('');
+
+  // Chart defaults
+  Chart.defaults.color = '#8b8d97';
+  Chart.defaults.borderColor = '#2a2d3a';
+  const labels = dates.map(d => d.slice(5));
+
+  // Main chart
+  new Chart(document.getElementById('chartMain'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Calories', data: days.map(d => d.calories), borderColor: '#fbbf24', backgroundColor: 'rgba(251,191,36,0.1)', tension: 0.3, fill: true, yAxisID: 'y' },
+        { label: 'Protein (g)', data: days.map(d => d.protein), borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.1)', tension: 0.3, fill: true, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { usePointStyle: true, pointStyle: 'circle' } } },
+      scales: {
+        y: { position: 'left', title: { display: true, text: 'Calories' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y1: { position: 'right', title: { display: true, text: 'Protein (g)' }, grid: { drawOnChartArea: false } }
+      }
+    }
+  });
+
+  // Macros chart
+  new Chart(document.getElementById('chartMacros'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Fat (g)', data: days.map(d => d.fat), borderColor: '#f472b6', tension: 0.3 },
+        { label: 'Carbs (g)', data: days.map(d => d.carbs), borderColor: '#34d399', tension: 0.3 }
+      ]
+    },
+    options: {
+      responsive: true, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { usePointStyle: true, pointStyle: 'circle' } } },
+      scales: { y: { grid: { color: 'rgba(255,255,255,0.05)' } } }
+    }
+  });
+
+  // Day of week
+  const dowNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const dowData = Array(7).fill(null).map(() => ({ cal: [], pro: [] }));
+  dates.forEach(d => {
+    const dow = new Date(d + 'T12:00:00').getDay();
+    dowData[dow].cal.push(daily[d].calories);
+    dowData[dow].pro.push(daily[d].protein);
+  });
+  const dowAvgCal = dowData.map(d => d.cal.length ? (d.cal.reduce((a,b)=>a+b,0)/d.cal.length).toFixed(0) : 0);
+  const dowAvgPro = dowData.map(d => d.pro.length ? (d.pro.reduce((a,b)=>a+b,0)/d.pro.length).toFixed(0) : 0);
+
+  new Chart(document.getElementById('chartDow'), {
+    type: 'bar',
+    data: { labels: dowNames, datasets: [{ label: 'Avg Calories', data: dowAvgCal, backgroundColor: 'rgba(251,191,36,0.6)', borderRadius: 6 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.05)' } } } }
+  });
+
+  new Chart(document.getElementById('chartDowP'), {
+    type: 'bar',
+    data: { labels: dowNames, datasets: [{ label: 'Avg Protein', data: dowAvgPro, backgroundColor: 'rgba(129,140,248,0.6)', borderRadius: 6 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.05)' } } } }
+  });
+}
+
+loadDashboard().catch(err => {
+  document.getElementById('summary-cards').innerHTML = `<div class="card"><h3>Error</h3><div class="value miss">Failed to load</div><div class="detail">${err.message}</div></div>`;
+});
+</script>
+</body>
+</html>

@@ -1,10 +1,11 @@
 use anyhow::Result;
 use axum::{
-    extract::{Query, State},
-    http::{Method, StatusCode},
+    extract::{Query, Request, State},
+    http::{header, Method, StatusCode},
+    middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive},
-        Sse,
+        Html, IntoResponse, Response, Sse,
     },
     routing::{get, post},
     Json, Router,
@@ -26,6 +27,7 @@ type SessionTx = mpsc::Sender<std::result::Result<Event, Infallible>>;
 /// Shared state across all handlers.
 struct AppState {
     sessions: Mutex<HashMap<String, SessionTx>>,
+    auth_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -35,9 +37,10 @@ struct MessageQuery {
 }
 
 /// Start the SSE MCP server on the given port/host.
-pub async fn serve_sse(port: u16, host: &str) -> Result<()> {
+pub async fn serve_sse(port: u16, host: &str, auth_key: Option<&str>) -> Result<()> {
     let state = Arc::new(AppState {
         sessions: Mutex::new(HashMap::new()),
+        auth_key: auth_key.map(String::from),
     });
 
     let cors = CorsLayer::new()
@@ -48,12 +51,24 @@ pub async fn serve_sse(port: u16, host: &str) -> Result<()> {
     let app = Router::new()
         .route("/sse", get(sse_handler))
         .route("/message", post(message_handler))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
         .route("/health", get(health_handler))
+        .route("/dashboard", get(dashboard_handler))
+        .route("/api/export", get(export_handler))
+        .route("/api/today", get(today_handler))
         .layer(cors)
         .with_state(state);
 
     let addr: std::net::SocketAddr = format!("{}:{}", host, port).parse()?;
     eprintln!("chomp MCP server (SSE) listening on http://{}", addr);
+    if auth_key.is_some() {
+        eprintln!("  Auth:          enabled (Bearer token required)");
+    } else {
+        eprintln!("  Auth:          disabled (use --auth-key to enable)");
+    }
     eprintln!("  SSE endpoint:  http://{}/sse", addr);
     eprintln!("  POST endpoint: http://{}/message", addr);
     eprintln!("  Health check:  http://{}/health", addr);
@@ -62,6 +77,40 @@ pub async fn serve_sse(port: u16, host: &str) -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Middleware that checks for a valid Bearer token when auth is enabled.
+async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Some(expected_key) = &state.auth_key {
+        let auth_header = request
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok());
+
+        match auth_header {
+            Some(header) if header.starts_with("Bearer ") => {
+                let token = &header[7..];
+                if token != expected_key.as_str() {
+                    return Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .body("Invalid auth key".into())
+                        .unwrap();
+                }
+            }
+            _ => {
+                return Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body("Missing Authorization: Bearer <key> header".into())
+                    .unwrap();
+            }
+        }
+    }
+
+    next.run(request).await
 }
 
 /// GET /sse — client connects here, receives an SSE stream.
@@ -145,6 +194,86 @@ async fn message_handler(
     }
 
     StatusCode::ACCEPTED
+}
+
+/// GET /dashboard — serves the chomp dashboard HTML.
+async fn dashboard_handler() -> impl IntoResponse {
+    let html = include_str!("../dashboard.html");
+    Html(html)
+}
+
+/// GET /api/export — returns CSV of all log entries for the dashboard.
+async fn export_handler() -> impl IntoResponse {
+    let db = match Database::open().and_then(|db| {
+        db.init()?;
+        Ok(db)
+    }) {
+        Ok(db) => db,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::CONTENT_TYPE, "text/plain")],
+                "Database error".to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    let entries = match db.get_history(90) {
+        Ok(e) => e,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(header::CONTENT_TYPE, "text/plain")],
+                "Export error".to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    let mut csv = String::from("date,food,amount,protein,fat,carbs,calories\n");
+    for e in &entries {
+        csv.push_str(&format!(
+            "{},{},{},{:.1},{:.1},{:.1},{:.0}\n",
+            e.date, e.food_name, e.amount, e.protein, e.fat, e.carbs, e.calories
+        ));
+    }
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/csv")],
+        csv,
+    )
+        .into_response()
+}
+
+/// GET /api/today — returns today's totals + entries as JSON.
+async fn today_handler() -> impl IntoResponse {
+    let db = match Database::open().and_then(|db| {
+        db.init()?;
+        Ok(db)
+    }) {
+        Ok(db) => db,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let totals = db.get_today_totals().unwrap_or_default();
+    let entries = db.get_history(1).unwrap_or_default();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "totals": totals,
+            "entries": entries
+        })),
+    )
+        .into_response()
 }
 
 /// GET /health — simple health check.

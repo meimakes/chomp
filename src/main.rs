@@ -20,6 +20,10 @@ struct Cli {
     #[arg(trailing_var_arg = true)]
     food: Vec<String>,
 
+    /// Date to log for (YYYY-MM-DD format, defaults to today)
+    #[arg(long)]
+    date: Option<String>,
+
     /// Output as JSON
     #[arg(long, global = true)]
     json: bool,
@@ -147,6 +151,9 @@ enum Commands {
         /// Host for SSE server (env: CHOMP_HOST)
         #[arg(long, default_value = "127.0.0.1", env = "CHOMP_HOST")]
         host: String,
+        /// Auth key required for SSE connections (env: CHOMP_AUTH_KEY)
+        #[arg(long, env = "CHOMP_AUTH_KEY")]
+        auth_key: Option<String>,
     },
 }
 
@@ -324,21 +331,23 @@ fn main() -> Result<()> {
             transport,
             port,
             host,
+            auth_key,
         }) => {
             match transport.as_str() {
                 "stdio" => mcp::serve_stdio()?,
                 #[cfg(feature = "sse")]
                 "sse" => {
                     let rt = tokio::runtime::Runtime::new()?;
-                    rt.block_on(sse::serve_sse(port, &host))?;
+                    rt.block_on(sse::serve_sse(port, &host, auth_key.as_deref()))?;
                 }
                 #[cfg(feature = "sse")]
                 "both" => {
                     // Run SSE in a background thread, stdio on main
                     let host_clone = host.clone();
+                    let auth_key_clone = auth_key.clone();
                     let sse_handle = std::thread::spawn(move || {
                         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                        rt.block_on(sse::serve_sse(port, &host_clone))
+                        rt.block_on(sse::serve_sse(port, &host_clone, auth_key_clone.as_deref()))
                     });
                     // Brief startup window — check if SSE died immediately
                     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -374,7 +383,7 @@ fn main() -> Result<()> {
             } else {
                 // Log the food
                 let input = cli.food.join(" ");
-                let entry = logging::parse_and_log(&db, &input)?;
+                let entry = logging::parse_and_log(&db, &input, cli.date.as_deref())?;
 
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&entry)?);

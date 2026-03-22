@@ -237,8 +237,8 @@ impl Database {
         Ok(scored.into_iter().map(|(_, f)| f).take(10).collect())
     }
 
-    pub fn log_food(&self, food_id: i64, amount: &str, macros: &Macros) -> Result<LogEntry> {
-        let date = Local::now().format("%Y-%m-%d").to_string();
+    pub fn log_food(&self, food_id: i64, amount: &str, macros: &Macros, date: Option<&str>) -> Result<LogEntry> {
+        let date = date.map(|d| d.to_string()).unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
 
         self.conn.execute(
             "INSERT INTO log (date, food_id, amount, protein, fat, carbs, calories)
@@ -910,7 +910,7 @@ mod tests {
             carbs: 1.0,
             calories: 142.0,
         };
-        let entry = db.log_food(id, "2", &macros).unwrap();
+        let entry = db.log_food(id, "2", &macros, None).unwrap();
         assert_eq!(entry.food_name, "Eggs");
         assert_eq!(entry.protein, 12.0);
 
@@ -925,7 +925,7 @@ mod tests {
             carbs: 0.0,
             calories: 250.0,
         };
-        db.log_food(id, "100g", &macros2).unwrap();
+        db.log_food(id, "100g", &macros2, None).unwrap();
 
         let totals = db.get_today_totals().unwrap();
         assert_eq!(totals.protein, 38.0);
@@ -941,7 +941,7 @@ mod tests {
             carbs: 0.0,
             calories: 400.0,
         };
-        db.log_food(id, "100g", &macros).unwrap();
+        db.log_food(id, "100g", &macros, None).unwrap();
 
         let history = db.get_history(7).unwrap();
         assert_eq!(history.len(), 1);
@@ -981,7 +981,7 @@ mod tests {
             carbs: 14.0,
             calories: 52.0,
         };
-        let entry = db.log_food(id, "1", &macros).unwrap();
+        let entry = db.log_food(id, "1", &macros, None).unwrap();
 
         let deleted = db.delete_log_entry(entry.id.unwrap()).unwrap();
         assert_eq!(deleted.food_name, "Apple");
@@ -1000,8 +1000,8 @@ mod tests {
             carbs: 23.0,
             calories: 89.0,
         };
-        db.log_food(id, "1", &m).unwrap();
-        db.log_food(id, "1", &m).unwrap();
+        db.log_food(id, "1", &m, None).unwrap();
+        db.log_food(id, "1", &m, None).unwrap();
 
         let deleted = db.delete_last_log_entry().unwrap();
         assert_eq!(deleted.food_name, "Banana");
@@ -1020,7 +1020,7 @@ mod tests {
             carbs: 0.0,
             calories: 250.0,
         };
-        let entry = db.log_food(id, "100g", &m).unwrap();
+        let entry = db.log_food(id, "100g", &m, None).unwrap();
 
         let updated = db
             .edit_log_entry(
@@ -1049,7 +1049,7 @@ mod tests {
             carbs: 28.0,
             calories: 130.0,
         };
-        db.log_food(id, "100g", &m).unwrap();
+        db.log_food(id, "100g", &m, None).unwrap();
 
         let stats = db.get_stats().unwrap();
         assert_eq!(stats.food_count, 1);

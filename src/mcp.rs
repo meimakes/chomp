@@ -141,6 +141,10 @@ fn handle_tools_list() -> Result<Value> {
                         "food": {
                             "type": "string",
                             "description": "Food name and optional amount, e.g. 'salmon 4oz' or 'bare bar'"
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Date to log for in YYYY-MM-DD format (defaults to today if omitted)"
                         }
                     },
                     "required": ["food"]
@@ -333,7 +337,8 @@ fn handle_tools_call(db: &Database, params: &Value) -> Result<Value> {
             let food = arguments["food"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing 'food' argument"))?;
-            let entry = parse_and_log(db, food)?;
+            let date = arguments["date"].as_str();
+            let entry = parse_and_log(db, food, date)?;
             Ok(json!({
                 "content": [{
                     "type": "text",

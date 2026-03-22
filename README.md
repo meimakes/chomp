@@ -21,6 +21,7 @@ chomp bacon                      # logs bacon (1 serving)
 chomp ribeye 8oz                 # logs 8oz ribeye
 chomp "bare bar"                 # logs bare bar
 chomp "Ortiz Sardines" 0.5       # logs half a serving (bare number = serving multiplier)
+chomp --date 2026-03-21 ribeye 8oz  # backdate to a specific day
 
 # Manage foods (the database of what things are)
 chomp add ribeye --protein 23 --fat 18 --carbs 0 --per 100g
@@ -103,7 +104,7 @@ CHOMP_HOST=0.0.0.0       # default: 127.0.0.1
 ```
 
 Exposes tools:
-- `log_food(food)` → logs + returns entry with calculated macros
+- `log_food(food, date?)` → logs + returns entry with calculated macros (date in YYYY-MM-DD format, defaults to today)
 - `search_food(query)` → fuzzy search results with nutrition info
 - `add_food(name, protein, fat, carbs, serving, ...)` → add new food to DB
 - `get_today()` → today's macro totals

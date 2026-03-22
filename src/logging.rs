@@ -2,8 +2,9 @@ use anyhow::{anyhow, Result};
 
 use crate::db::{Database, LogEntry};
 
-/// Parse input like "ribeye 8oz" or "bare bar" and log it
-pub fn parse_and_log(db: &Database, input: &str) -> Result<LogEntry> {
+/// Parse input like "ribeye 8oz" or "bare bar" and log it.
+/// Optional date parameter allows backdating entries (format: YYYY-MM-DD).
+pub fn parse_and_log(db: &Database, input: &str, date: Option<&str>) -> Result<LogEntry> {
     let (food_name, amount) = parse_input(input);
 
     // Look up the food
@@ -34,7 +35,7 @@ pub fn parse_and_log(db: &Database, input: &str) -> Result<LogEntry> {
     })?;
 
     // Log it
-    let entry = db.log_food(food.id.unwrap(), &actual_amount, &macros)?;
+    let entry = db.log_food(food.id.unwrap(), &actual_amount, &macros, date)?;
 
     Ok(entry)
 }

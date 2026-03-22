@@ -1,0 +1,19 @@
+# Build stage
+FROM rust:1.83-slim AS builder
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+COPY dashboard.html ./
+RUN cargo build --release --features sse
+
+# Runtime stage
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/chomp /usr/local/bin/chomp
+COPY --from=builder /app/dashboard.html /app/dashboard.html
+
+ENV CHOMP_PORT=3000
+ENV CHOMP_HOST=0.0.0.0
+EXPOSE 3000
+
+CMD ["chomp", "serve", "--transport", "sse", "--port", "3000", "--host", "0.0.0.0"]
