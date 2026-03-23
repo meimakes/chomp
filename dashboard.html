@@ -99,7 +99,7 @@
 // Configurable targets via URL params
 const params = new URLSearchParams(window.location.search);
 const TARGET_PROTEIN = +(params.get('protein') || 100);
-const TARGET_CALORIES = +(params.get('calories') || 2000);
+const TARGET_CALORIES = +(params.get('calories') || 1300);
 const CALORIE_MODE = params.get('calorieMode') || 'under'; // 'under' or 'over'
 
 // Track chart instances for cleanup on reload
