@@ -13,9 +13,8 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 RUN mkdir -p /data
 COPY --from=builder /app/target/release/chomp /usr/local/bin/chomp
 
-ENV CHOMP_PORT=3000
 ENV CHOMP_HOST=0.0.0.0
 ENV CHOMP_DB_PATH=/data/foods.db
-EXPOSE 3000
 
-CMD ["chomp", "serve", "--transport", "sse", "--port", "3000", "--host", "0.0.0.0"]
+# Railway injects PORT; map it to CHOMP_PORT so clap picks it up
+CMD sh -c "CHOMP_PORT=\${PORT:-3000} exec chomp serve --transport sse"
