@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
-COPY dashboard.html ./
+COPY dashboard.html login.html ./
 RUN cargo build --release --features sse
 
 # Runtime stage
