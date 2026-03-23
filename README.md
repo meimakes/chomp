@@ -11,7 +11,7 @@ AI assistants waste credits searching for nutrition data every time you log food
 
 ## Solution
 
-Local SQLite database that learns YOUR foods. AI queries it instead of web searching.
+Local SQLite database that learns YOUR foods. AI queries it instead of web searching. Includes a web dashboard, REST API, and MCP server for Claude Desktop integration.
 
 ## Commands
 
@@ -25,6 +25,7 @@ chomp --date 2026-03-21 ribeye 8oz  # backdate to a specific day
 
 # Manage foods (the database of what things are)
 chomp add ribeye --protein 23 --fat 18 --carbs 0 --per 100g
+chomp add ribeye -p 23 -f 18 -c 0 --per 100g --alias rib
 chomp edit ribeye --protein 25 --fat 20
 chomp delete "food name"         # removes food definition from DB
 
@@ -36,35 +37,65 @@ chomp edit-log 42 --amount 8oz   # fix a log entry
 # Query
 chomp search salmon              # fuzzy match
 chomp today                      # show today's totals
-chomp history                    # recent logs
+chomp history                    # recent logs (default 7 days)
+chomp history --days 30          # recent logs (30 days)
 chomp stats                      # database stats
+
+# Compound foods
+chomp compound "breakfast" -i "3 eggs + 2 bacon"
 
 # Import/Export
 chomp export --csv               # for spreadsheets
+chomp export --json              # structured output
 chomp import usda                # seed from USDA database
+chomp import csv --path foods.csv
+
+# Server
+chomp serve                          # MCP server (stdio)
+chomp serve --transport sse          # HTTP server with SSE, REST API, dashboard
+chomp serve --transport sse --auth-key mysecret  # with authentication
+chomp serve --transport both         # stdio + HTTP simultaneously
 ```
 
-## Implemented Features
+All commands support `--json` for structured output.
+
+## Features
 
 - **Fuzzy matching** — "rib eye" = "ribeye"
 - **Learned portions** — "salmon" defaults to your usual 4oz (via `default_amount` field)
 - **Flexible amounts** — bare numbers are serving multipliers (`0.5` of a `4oz` serving = 2oz), units work too (`8oz`, `3 tbsp`)
 - **Aliases** — "bb" = "bare bar"
-- **JSON output** — All commands support `--json` for AI integration
-- **MCP server** — `chomp serve` for Claude Desktop integration
+- **Compound foods** — save multi-item meals as single entries
+- **Web dashboard** — dark-themed nutrition dashboard with charts, target tracking, and daily breakdowns
+- **REST API** — full CRUD API for foods and log entries
+- **MCP server** — stdio and SSE transports for Claude Desktop / remote AI agents
+- **Authentication** — bearer token + session cookie auth for the HTTP server
+- **Remote client** — point the CLI at a remote chomp server instead of a local DB
+- **USDA import** — seed from FoodData Central SR Legacy dataset (~7,800 foods)
+- **CSV import** — bulk load from CSV (header: `name,protein,fat,carbs,calories,serving`)
+- **Docker/Railway ready** — multi-stage Dockerfile with persistent volume support
 
-- **Compound foods** — `chomp compound "breakfast" -i "3 eggs + 2 bacon"` saves multi-item meals as single entry
-- **USDA import** — `chomp import usda` downloads and imports from FoodData Central SR Legacy dataset
-- **CSV import** — `chomp import csv --path foods.csv` for bulk loading (header: name,protein,fat,carbs,calories,serving)
+## Web Dashboard
 
-## Roadmap / Planned Features
+When running with `--transport sse`, a dashboard is available at `/dashboard`.
 
-- **Nutrition label import** — Dedicated workflow for photo → AI extraction → DB (currently works via manual `chomp add`)
-- **Smart defaults** — Learn your typical portions and auto-suggest them
+Features: daily calorie/protein averages, macro ratio donut chart, target tracking bars, day-of-week breakdowns, today's entries table, top foods by frequency.
+
+Dashboard targets are configurable via URL params:
+
+```
+/dashboard?protein=120&calories=1500&calorieMode=under
+```
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `protein` | 100 | Daily protein target (g) |
+| `calories` | 2000 | Daily calorie target |
+| `calorieMode` | `under` | `under` or `over` — whether hitting target means staying below or above |
 
 ## AI Integration
 
-### CLI (for OpenClaw/exec)
+### CLI (for exec-based agents)
 ```bash
 chomp "salmon 4oz" --json        # log + structured output
 chomp search salmon --json       # nutrition lookup without web search
@@ -73,63 +104,104 @@ chomp search salmon --json       # nutrition lookup without web search
 ### MCP Server
 ```bash
 # stdio transport (Claude Desktop)
-chomp serve                          # default: stdio
+chomp serve
 chomp serve --transport stdio
 
-# SSE transport (Poke.com, remote agents)
-chomp serve --transport sse          # default: http://127.0.0.1:3000
+# SSE transport (remote agents, Railway)
+chomp serve --transport sse
 chomp serve --transport sse --port 3456 --host 0.0.0.0
 
 # Both transports simultaneously
 chomp serve --transport both --port 3000
 ```
 
-**Transport options:**
+**MCP tools exposed:**
 
-| Transport | Use case | Endpoint |
-|-----------|----------|----------|
-| `stdio` | Claude Desktop, local AI | stdin/stdout |
-| `sse` | Poke.com, Railway, remote | `GET /sse` + `POST /message` |
-| `both` | Run both simultaneously | stdio + HTTP |
+| Tool | Description |
+|------|-------------|
+| `log_food(food, date?)` | Log food, returns entry with calculated macros |
+| `search_food(query)` | Fuzzy search with nutrition info |
+| `add_food(name, protein, fat, carbs, serving, ...)` | Add new food to DB |
+| `edit_food(name, ...)` | Edit an existing food |
+| `delete_food(name)` | Delete a food from DB |
+| `get_today()` | Today's macro totals |
+| `get_history(days?)` | Recent log entries |
+| `unlog(id)` | Delete a log entry by ID |
+| `unlog_last()` | Delete most recent log entry |
+| `edit_log(id, ...)` | Edit a log entry |
 
-**SSE endpoints:**
-- `GET /sse` — SSE event stream (returns `endpoint` event with session POST URL)
-- `POST /message?sessionId=<id>` — send JSON-RPC requests
-- `GET /health` — health check
+### REST API
 
-**Environment variables (SSE mode):**
-```bash
-CHOMP_PORT=3000          # default: 3000
-CHOMP_HOST=0.0.0.0       # default: 127.0.0.1
+All endpoints (except `/health`, `/login`, `/logout`) require authentication via `Authorization: Bearer <key>` header or session cookie.
+
+```
+GET    /dashboard          # web dashboard
+GET    /health             # health check
+GET    /login              # login page
+POST   /login              # authenticate (sets session cookie)
+POST   /logout             # clear session
+
+GET    /api/today           # today's totals + entries
+GET    /api/history?days=7  # log history
+GET    /api/export?days=30  # CSV export
+POST   /api/log             # log food  { "food": "ribeye 8oz", "date": "2026-03-21" }
+DELETE /api/log/:id         # delete log entry
+DELETE /api/log/last        # delete most recent log entry
+PUT    /api/log/:id         # edit log entry
+
+GET    /api/foods?q=salmon  # search foods
+POST   /api/foods           # add food
+PUT    /api/foods/:name     # edit food
+DELETE /api/foods/:name     # delete food
+
+GET    /api/stats           # database stats
 ```
 
-Exposes tools:
-- `log_food(food, date?)` → logs + returns entry with calculated macros (date in YYYY-MM-DD format, defaults to today)
-- `search_food(query)` → fuzzy search results with nutrition info
-- `add_food(name, protein, fat, carbs, serving, ...)` → add new food to DB
-- `get_today()` → today's macro totals
-- `get_history(days)` → recent log entries
+### Remote Client Mode
 
-## Workflows
+Point the CLI at a remote chomp server instead of using a local database:
 
-### Daily Logging
-Human tells AI what they ate → AI calls `chomp "food"` → done
+```bash
+export CHOMP_SERVER_URL=https://your-chomp.railway.app
+export CHOMP_AUTH_KEY=your-secret-key
+chomp today                      # queries the remote server
+```
 
-### New Food from Label
-Human sends photo of nutrition label → AI extracts data via vision → AI calls `chomp add` → food in DB forever
+## Deployment (Docker / Railway)
 
-### Macro Check-ins
-AI calls `chomp today --json` → reports totals without searching
+```bash
+docker build -t chomp .
+docker run -p 3000:3000 -e CHOMP_AUTH_KEY=secret -v chomp-data:/data chomp
+```
+
+On Railway:
+1. Deploy from GitHub
+2. Set `CHOMP_AUTH_KEY` env var
+3. Add a volume mounted at `/data` (via Command Palette or `railway volume add --mount-path /data`)
+
+The Dockerfile reads Railway's `PORT` env var automatically.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHOMP_DB_PATH` | `~/.chomp/foods.db` | Database file path |
+| `CHOMP_PORT` | `3000` | HTTP server port |
+| `CHOMP_HOST` | `127.0.0.1` | HTTP server bind address |
+| `CHOMP_AUTH_KEY` | _(none)_ | Authentication key for HTTP server |
+| `CHOMP_SERVER_URL` | _(none)_ | Remote server URL (enables client mode) |
+| `PORT` | _(none)_ | Railway-injected port (maps to `CHOMP_PORT`) |
 
 ## Tech Stack
 
 - **Language:** Rust (fast, single binary, no runtime)
-- **Database:** SQLite (portable, no server)
-- **Optional:** Seed from USDA FoodData Central on first run
+- **Database:** SQLite via rusqlite (portable, no server)
+- **HTTP:** Axum + Tower (SSE, REST API, static files)
+- **Charts:** Chart.js (dashboard)
 
 ## File Locations
 
-- DB: `~/.chomp/foods.db`
+- DB: `~/.chomp/foods.db` (local), `/data/foods.db` (Docker/Railway)
 
 ## Prior Art
 
