@@ -318,7 +318,7 @@ async fn today_handler() -> impl IntoResponse {
     };
 
     let totals = db.get_today_totals().unwrap_or_default();
-    let entries = db.get_history(1).unwrap_or_default();
+    let entries = db.get_history(0).unwrap_or_default();
 
     Json(serde_json::json!({
         "totals": totals,
