@@ -5,7 +5,7 @@ use axum::{
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive},
-        Html, IntoResponse, Response, Sse,
+        Html, IntoResponse, Redirect, Response, Sse,
     },
     routing::{delete, get, post, put},
     Json, Router,
@@ -83,6 +83,8 @@ pub async fn serve_sse(port: u16, host: &str, auth_key: Option<&str>) -> Result<
         ))
         // Public routes (after route_layer)
         .route("/health", get(health_handler))
+        .route("/login", get(login_page_handler).post(login_handler))
+        .route("/logout", post(logout_handler))
         .layer(cors)
         .with_state(state);
 
@@ -104,34 +106,64 @@ pub async fn serve_sse(port: u16, host: &str, auth_key: Option<&str>) -> Result<
     Ok(())
 }
 
-/// Middleware that checks for a valid Bearer token when auth is enabled.
+/// Extract the chomp_session cookie value from a request.
+fn get_session_cookie(request: &Request) -> Option<String> {
+    request
+        .headers()
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|c| {
+                let c = c.trim();
+                c.strip_prefix("chomp_session=").map(String::from)
+            })
+        })
+}
+
+/// Returns true if the request looks like it came from a browser expecting HTML.
+fn is_browser_request(request: &Request) -> bool {
+    request
+        .headers()
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/html"))
+        .unwrap_or(false)
+}
+
+/// Middleware that checks for a valid Bearer token or session cookie when auth is enabled.
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Response {
     if let Some(expected_key) = &state.auth_key {
-        let auth_header = request
+        // Check Bearer token first
+        let bearer_ok = request
             .headers()
             .get("authorization")
-            .and_then(|v| v.to_str().ok());
+            .and_then(|v| v.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(|token| token == expected_key.as_str())
+            .unwrap_or(false);
 
-        match auth_header {
-            Some(header) if header.starts_with("Bearer ") => {
-                let token = &header[7..];
-                if token != expected_key.as_str() {
-                    return Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
-                        .body("Invalid auth key".into())
-                        .unwrap();
-                }
+        // Then check session cookie
+        let cookie_ok = get_session_cookie(&request)
+            .map(|token| token == *expected_key)
+            .unwrap_or(false);
+
+        if !bearer_ok && !cookie_ok {
+            // Redirect browsers to login page; return 401 for API clients
+            if is_browser_request(&request) {
+                let path = request.uri().path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or("/dashboard");
+                let login_url = format!("/login?next={}", urlencoding::encode(path));
+                return Redirect::to(&login_url).into_response();
             }
-            _ => {
-                return Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body("Missing Authorization: Bearer <key> header".into())
-                    .unwrap();
-            }
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body("Missing or invalid Authorization: Bearer <key> header".into())
+                .unwrap();
         }
     }
 
@@ -546,6 +578,64 @@ async fn stats_handler() -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+/// GET /login — serves the login page.
+async fn login_page_handler(State(state): State<Arc<AppState>>) -> Response {
+    if state.auth_key.is_none() {
+        // No auth configured — redirect straight to dashboard
+        return Redirect::to("/dashboard").into_response();
+    }
+    let html = include_str!("../login.html");
+    Html(html).into_response()
+}
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    key: String,
+}
+
+/// POST /login — validates the auth key and sets a session cookie.
+async fn login_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    let expected = match &state.auth_key {
+        Some(k) => k,
+        None => {
+            // No auth configured — just succeed
+            return StatusCode::OK.into_response();
+        }
+    };
+
+    if body.key != *expected {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            "set-cookie",
+            format!(
+                "chomp_session={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+                body.key,
+                60 * 60 * 24 * 30 // 30 days
+            ),
+        )
+        .body("OK".into())
+        .unwrap()
+}
+
+/// POST /logout — clears the session cookie.
+async fn logout_handler() -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            "set-cookie",
+            "chomp_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+        )
+        .body("OK".into())
+        .unwrap()
 }
 
 /// GET /health — simple health check.
