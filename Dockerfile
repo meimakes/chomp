@@ -9,8 +9,8 @@ RUN cargo build --release --features sse
 # Runtime stage
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /data
 COPY --from=builder /app/target/release/chomp /usr/local/bin/chomp
-COPY --from=builder /app/dashboard.html /app/dashboard.html
 
 ENV CHOMP_PORT=3000
 ENV CHOMP_HOST=0.0.0.0

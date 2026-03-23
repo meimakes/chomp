@@ -1,13 +1,13 @@
 use anyhow::Result;
 use axum::{
-    extract::{Query, Request, State},
+    extract::{Path, Query, Request, State},
     http::{header, Method, StatusCode},
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive},
         Html, IntoResponse, Response, Sse,
     },
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -45,20 +45,44 @@ pub async fn serve_sse(port: u16, host: &str, auth_key: Option<&str>) -> Result<
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers(Any);
 
+    // All protected routes go here (before route_layer)
     let app = Router::new()
         .route("/sse", get(sse_handler))
         .route("/message", post(message_handler))
+        .route("/dashboard", get(dashboard_handler))
+        .route("/api/export", get(export_handler))
+        .route("/api/today", get(today_handler))
+        .route("/api/log", post(log_handler))
+        .route(
+            "/api/foods",
+            get(search_foods_handler).post(add_food_handler),
+        )
+        .route(
+            "/api/foods/:name",
+            put(edit_food_handler).delete(delete_food_handler),
+        )
+        .route("/api/history", get(history_handler))
+        .route("/api/log/last", delete(delete_last_log_handler))
+        .route(
+            "/api/log/:id",
+            delete(delete_log_handler).put(edit_log_handler),
+        )
+        .route("/api/stats", get(stats_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ))
+        // Public routes (after route_layer)
         .route("/health", get(health_handler))
-        .route("/dashboard", get(dashboard_handler))
-        .route("/api/export", get(export_handler))
-        .route("/api/today", get(today_handler))
         .layer(cors)
         .with_state(state);
 
@@ -71,6 +95,7 @@ pub async fn serve_sse(port: u16, host: &str, auth_key: Option<&str>) -> Result<
     }
     eprintln!("  SSE endpoint:  http://{}/sse", addr);
     eprintln!("  POST endpoint: http://{}/message", addr);
+    eprintln!("  Dashboard:     http://{}/dashboard", addr);
     eprintln!("  Health check:  http://{}/health", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -113,25 +138,36 @@ async fn auth_middleware(
     next.run(request).await
 }
 
+/// Helper to open DB, returning an error response on failure.
+fn open_db() -> std::result::Result<Database, (StatusCode, Json<serde_json::Value>)> {
+    Database::open()
+        .and_then(|db| {
+            db.init()?;
+            Ok(db)
+        })
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": format!("database error: {}", e)})),
+            )
+        })
+}
+
 /// GET /sse — client connects here, receives an SSE stream.
-/// First event is `endpoint` with the POST URL containing the session ID.
 async fn sse_handler(
     State(state): State<Arc<AppState>>,
 ) -> Sse<ReceiverStream<std::result::Result<Event, Infallible>>> {
     let session_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::channel(32);
 
-    // Send the endpoint event so the client knows where to POST
     let endpoint_url = format!("/message?sessionId={}", session_id);
     let _ = tx
         .send(Ok(Event::default().event("endpoint").data(endpoint_url)))
         .await;
 
-    // Store session
     let tx_clone = tx.clone();
     state.sessions.lock().await.insert(session_id.clone(), tx);
 
-    // Clean up on disconnect: periodically check if the sender's receiver is gone
     let state_clone = state.clone();
     let sid = session_id.clone();
     tokio::spawn(async move {
@@ -153,7 +189,6 @@ async fn message_handler(
     Query(query): Query<MessageQuery>,
     Json(request): Json<JsonRpcRequest>,
 ) -> StatusCode {
-    // Lazy cleanup: check if session is dead before processing
     let mut sessions = state.sessions.lock().await;
     let tx = match sessions.get(&query.session_id) {
         Some(tx) if tx.is_closed() => {
@@ -163,9 +198,8 @@ async fn message_handler(
         Some(tx) => tx.clone(),
         None => return StatusCode::NOT_FOUND,
     };
-    drop(sessions); // Release lock before blocking DB work
+    drop(sessions);
 
-    // Open a fresh DB connection per request (SQLite handles concurrent readers)
     let db = match Database::open().and_then(|db| {
         db.init()?;
         Ok(db)
@@ -202,12 +236,9 @@ async fn dashboard_handler() -> impl IntoResponse {
     Html(html)
 }
 
-/// GET /api/export — returns CSV of all log entries for the dashboard.
-async fn export_handler() -> impl IntoResponse {
-    let db = match Database::open().and_then(|db| {
-        db.init()?;
-        Ok(db)
-    }) {
+/// GET /api/export?days=N — returns CSV of log entries.
+async fn export_handler(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let db = match open_db() {
         Ok(db) => db,
         Err(_) => {
             return (
@@ -219,7 +250,12 @@ async fn export_handler() -> impl IntoResponse {
         }
     };
 
-    let entries = match db.get_history(90) {
+    let days: u32 = params
+        .get("days")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(90);
+
+    let entries = match db.get_history(days) {
         Ok(e) => e,
         Err(_) => {
             return (
@@ -239,41 +275,277 @@ async fn export_handler() -> impl IntoResponse {
         ));
     }
 
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/csv")],
-        csv,
-    )
-        .into_response()
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/csv")], csv).into_response()
 }
 
 /// GET /api/today — returns today's totals + entries as JSON.
 async fn today_handler() -> impl IntoResponse {
-    let db = match Database::open().and_then(|db| {
-        db.init()?;
-        Ok(db)
-    }) {
+    let db = match open_db() {
         Ok(db) => db,
-        Err(_) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
+        Err(e) => return e.into_response(),
     };
 
     let totals = db.get_today_totals().unwrap_or_default();
     let entries = db.get_history(1).unwrap_or_default();
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "totals": totals,
-            "entries": entries
-        })),
-    )
-        .into_response()
+    Json(serde_json::json!({
+        "totals": totals,
+        "entries": entries
+    }))
+    .into_response()
+}
+
+// --- REST API handlers ---
+
+#[derive(Deserialize)]
+struct LogRequest {
+    food: String,
+    date: Option<String>,
+}
+
+/// POST /api/log — parse and log food.
+async fn log_handler(Json(body): Json<LogRequest>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match crate::logging::parse_and_log(&db, &body.food, body.date.as_deref()) {
+        Ok(entry) => (StatusCode::CREATED, Json(serde_json::json!(entry))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(rename = "q")]
+    query: String,
+}
+
+/// GET /api/foods?q=query — search foods.
+async fn search_foods_handler(Query(params): Query<SearchQuery>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.search_foods(&params.query) {
+        Ok(foods) => Json(serde_json::json!(foods)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddFoodRequest {
+    name: String,
+    protein: f64,
+    fat: f64,
+    carbs: f64,
+    #[serde(default = "default_serving")]
+    per: String,
+    calories: Option<f64>,
+    #[serde(default)]
+    aliases: Vec<String>,
+}
+
+fn default_serving() -> String {
+    "100g".to_string()
+}
+
+/// POST /api/foods — add a new food.
+async fn add_food_handler(Json(body): Json<AddFoodRequest>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    let cals = body
+        .calories
+        .unwrap_or(body.protein * 4.0 + body.fat * 9.0 + body.carbs * 4.0);
+    let food = crate::food::Food::new(
+        &body.name,
+        body.protein,
+        body.fat,
+        body.carbs,
+        cals,
+        &body.per,
+        body.aliases,
+    );
+
+    match db.add_food(&food) {
+        Ok(_) => (StatusCode::CREATED, Json(serde_json::json!(food))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct EditFoodRequest {
+    protein: Option<f64>,
+    fat: Option<f64>,
+    carbs: Option<f64>,
+    per: Option<String>,
+    calories: Option<f64>,
+}
+
+/// PUT /api/foods/:name — edit a food.
+async fn edit_food_handler(
+    Path(name): Path<String>,
+    Json(body): Json<EditFoodRequest>,
+) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.edit_food(
+        &name,
+        body.protein,
+        body.fat,
+        body.carbs,
+        body.per.as_deref(),
+        body.calories,
+    ) {
+        Ok(()) => {
+            let food = db.search_food(&name).ok().flatten();
+            Json(serde_json::json!(food)).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/foods/:name — delete a food.
+async fn delete_food_handler(Path(name): Path<String>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.delete_food(&name) {
+        Ok(()) => Json(serde_json::json!({"deleted": name})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    days: Option<u32>,
+}
+
+/// GET /api/history?days=N — get history.
+async fn history_handler(Query(params): Query<HistoryQuery>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    let days = params.days.unwrap_or(7);
+    match db.get_history(days) {
+        Ok(entries) => Json(serde_json::json!(entries)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/log/:id — delete a log entry by ID.
+async fn delete_log_handler(Path(id): Path<i64>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.delete_log_entry(id) {
+        Ok(entry) => Json(serde_json::json!(entry)).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/log/last — delete the most recent log entry.
+async fn delete_last_log_handler() -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.delete_last_log_entry() {
+        Ok(entry) => Json(serde_json::json!(entry)).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct EditLogRequest {
+    amount: Option<String>,
+    protein: Option<f64>,
+    fat: Option<f64>,
+    carbs: Option<f64>,
+}
+
+/// PUT /api/log/:id — edit a log entry.
+async fn edit_log_handler(
+    Path(id): Path<i64>,
+    Json(body): Json<EditLogRequest>,
+) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.edit_log_entry(id, body.amount, body.protein, body.fat, body.carbs) {
+        Ok(entry) => Json(serde_json::json!(entry)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/stats — get database stats.
+async fn stats_handler() -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.get_stats() {
+        Ok(stats) => Json(serde_json::json!(stats)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 /// GET /health — simple health check.

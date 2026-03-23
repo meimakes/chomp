@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod client;
 mod db;
 mod food;
 mod logging;
@@ -157,12 +158,42 @@ enum Commands {
     },
 }
 
+/// Backend for dispatching commands — local DB or remote server.
+enum Backend {
+    Local(db::Database),
+    Remote(client::RemoteClient),
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize database
-    let db = db::Database::open()?;
-    db.init()?;
+    // Commands that always use local mode
+    match &cli.command {
+        Some(Commands::Serve {
+            transport,
+            port,
+            host,
+            auth_key,
+        }) => {
+            return run_serve(transport, *port, host, auth_key.as_deref());
+        }
+        Some(Commands::Import { source, path }) => {
+            let db = db::Database::open()?;
+            db.init()?;
+            return run_import(&db, source, path.as_deref());
+        }
+        _ => {}
+    }
+
+    // Determine backend
+    let backend = if let Ok(server_url) = std::env::var("CHOMP_SERVER_URL") {
+        let auth_key = std::env::var("CHOMP_AUTH_KEY").unwrap_or_default();
+        Backend::Remote(client::RemoteClient::new(&server_url, &auth_key))
+    } else {
+        let db = db::Database::open()?;
+        db.init()?;
+        Backend::Local(db)
+    };
 
     match cli.command {
         Some(Commands::Add {
@@ -175,20 +206,38 @@ fn main() -> Result<()> {
             alias,
         }) => {
             let cals = calories.unwrap_or(protein * 4.0 + fat * 9.0 + carbs * 4.0);
-            let food = food::Food::new(&name, protein, fat, carbs, cals, &per, alias);
-            db.add_food(&food)?;
-
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&food)?);
-            } else {
-                println!(
-                    "Added: {} ({:.0}p/{:.0}f/{:.0}c per {})",
-                    name, protein, fat, carbs, per
-                );
+            match &backend {
+                Backend::Local(db) => {
+                    let food = food::Food::new(&name, protein, fat, carbs, cals, &per, alias);
+                    db.add_food(&food)?;
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&food)?);
+                    } else {
+                        println!(
+                            "Added: {} ({:.0}p/{:.0}f/{:.0}c per {})",
+                            name, protein, fat, carbs, per
+                        );
+                    }
+                }
+                Backend::Remote(client) => {
+                    let food =
+                        client.add_food(&name, protein, fat, carbs, &per, calories, alias)?;
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&food)?);
+                    } else {
+                        println!(
+                            "Added: {} ({:.0}p/{:.0}f/{:.0}c per {})",
+                            food.name, food.protein, food.fat, food.carbs, food.serving
+                        );
+                    }
+                }
             }
         }
         Some(Commands::Search { query }) => {
-            let results = db.search_foods(&query)?;
+            let results = match &backend {
+                Backend::Local(db) => db.search_foods(&query)?,
+                Backend::Remote(client) => client.search_foods(&query)?,
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
             } else {
@@ -201,7 +250,10 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::Today) => {
-            let totals = db.get_today_totals()?;
+            let totals = match &backend {
+                Backend::Local(db) => db.get_today_totals()?,
+                Backend::Remote(client) => client.get_today_totals()?,
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&totals)?);
             } else {
@@ -212,7 +264,10 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::History { days }) => {
-            let entries = db.get_history(days)?;
+            let entries = match &backend {
+                Backend::Local(db) => db.get_history(days)?,
+                Backend::Remote(client) => client.get_history(days)?,
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {
@@ -229,18 +284,15 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Some(Commands::Export { format }) => match format.as_str() {
-            "csv" => db.export_csv()?,
-            "json" => db.export_json()?,
-            _ => anyhow::bail!("Unknown format: {}", format),
-        },
-        Some(Commands::Import { source, path }) => match source.as_str() {
-            "usda" => db.import_usda()?,
-            "csv" => {
-                let p = path.ok_or_else(|| anyhow::anyhow!("--path required for csv import"))?;
-                db.import_csv(&p)?;
+        Some(Commands::Export { format }) => match &backend {
+            Backend::Local(db) => match format.as_str() {
+                "csv" => db.export_csv()?,
+                "json" => db.export_json()?,
+                _ => anyhow::bail!("Unknown format: {}", format),
+            },
+            Backend::Remote(_) => {
+                anyhow::bail!("Export is only available in local mode");
             }
-            _ => anyhow::bail!("Unknown source: {}", source),
         },
         Some(Commands::Edit {
             name,
@@ -249,22 +301,40 @@ fn main() -> Result<()> {
             carbs,
             per,
             calories,
-        }) => {
-            db.edit_food(&name, protein, fat, carbs, per.as_deref(), calories)?;
-            let food = db.search_food(&name)?;
-            if let Some(f) = food {
-                println!(
-                    "Updated: {} ({}p/{}f/{}c per {})",
-                    f.name, f.protein, f.fat, f.carbs, f.serving
-                );
+        }) => match &backend {
+            Backend::Local(db) => {
+                db.edit_food(&name, protein, fat, carbs, per.as_deref(), calories)?;
+                let food = db.search_food(&name)?;
+                if let Some(f) = food {
+                    println!(
+                        "Updated: {} ({}p/{}f/{}c per {})",
+                        f.name, f.protein, f.fat, f.carbs, f.serving
+                    );
+                }
             }
-        }
+            Backend::Remote(client) => {
+                let food =
+                    client.edit_food(&name, protein, fat, carbs, per.as_deref(), calories)?;
+                if let Some(f) = food {
+                    println!(
+                        "Updated: {} ({}p/{}f/{}c per {})",
+                        f.name, f.protein, f.fat, f.carbs, f.serving
+                    );
+                }
+            }
+        },
         Some(Commands::Delete { name }) => {
-            db.delete_food(&name)?;
+            match &backend {
+                Backend::Local(db) => db.delete_food(&name)?,
+                Backend::Remote(client) => client.delete_food(&name)?,
+            }
             println!("Deleted: {}", name);
         }
         Some(Commands::Unlog { id }) => {
-            let entry = db.delete_log_entry(id)?;
+            let entry = match &backend {
+                Backend::Local(db) => db.delete_log_entry(id)?,
+                Backend::Remote(client) => client.delete_log_entry(id)?,
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entry)?);
             } else {
@@ -275,7 +345,10 @@ fn main() -> Result<()> {
             }
         }
         Some(Commands::UnlogLast) => {
-            let entry = db.delete_last_log_entry()?;
+            let entry = match &backend {
+                Backend::Local(db) => db.delete_last_log_entry()?,
+                Backend::Remote(client) => client.delete_last_log_entry()?,
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entry)?);
             } else {
@@ -292,7 +365,12 @@ fn main() -> Result<()> {
             fat,
             carbs,
         }) => {
-            let entry = db.edit_log_entry(id, amount, protein, fat, carbs)?;
+            let entry = match &backend {
+                Backend::Local(db) => db.edit_log_entry(id, amount, protein, fat, carbs)?,
+                Backend::Remote(client) => {
+                    client.edit_log_entry(id, amount, protein, fat, carbs)?
+                }
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entry)?);
             } else {
@@ -302,76 +380,47 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Some(Commands::Compound { name, items }) => {
-            // Parse "3 eggs + 2 bacon" format
-            let parts: Vec<(String, String)> = items
-                .split('+')
-                .map(|part| {
-                    let part = part.trim();
-                    let words: Vec<&str> = part.split_whitespace().collect();
-                    if words.len() >= 2 {
-                        let amount = words[0].to_string();
-                        let food = words[1..].join(" ");
-                        (food, format!("{}{}", amount, "serving"))
-                    } else {
-                        (part.to_string(), "1serving".to_string())
-                    }
-                })
-                .collect();
-            db.create_compound_food(&name, &parts)?;
-        }
+        Some(Commands::Compound { name, items }) => match &backend {
+            Backend::Local(db) => {
+                let parts: Vec<(String, String)> = items
+                    .split('+')
+                    .map(|part| {
+                        let part = part.trim();
+                        let words: Vec<&str> = part.split_whitespace().collect();
+                        if words.len() >= 2 {
+                            let amount = words[0].to_string();
+                            let food = words[1..].join(" ");
+                            (food, format!("{}{}", amount, "serving"))
+                        } else {
+                            (part.to_string(), "1serving".to_string())
+                        }
+                    })
+                    .collect();
+                db.create_compound_food(&name, &parts)?;
+            }
+            Backend::Remote(_) => {
+                anyhow::bail!("Compound food creation is only available in local mode");
+            }
+        },
         Some(Commands::Stats) => {
-            let stats = db.get_stats()?;
+            let stats = match &backend {
+                Backend::Local(db) => db.get_stats()?,
+                Backend::Remote(client) => client.get_stats()?,
+            };
             println!("Foods: {}", stats.food_count);
             println!("Log entries: {}", stats.log_count);
             println!("First entry: {}", stats.first_entry.unwrap_or_default());
             println!("Last entry: {}", stats.last_entry.unwrap_or_default());
         }
-        Some(Commands::Serve {
-            transport,
-            port,
-            host,
-            auth_key,
-        }) => {
-            match transport.as_str() {
-                "stdio" => mcp::serve_stdio()?,
-                #[cfg(feature = "sse")]
-                "sse" => {
-                    let rt = tokio::runtime::Runtime::new()?;
-                    rt.block_on(sse::serve_sse(port, &host, auth_key.as_deref()))?;
-                }
-                #[cfg(feature = "sse")]
-                "both" => {
-                    // Run SSE in a background thread, stdio on main
-                    let host_clone = host.clone();
-                    let auth_key_clone = auth_key.clone();
-                    let sse_handle = std::thread::spawn(move || {
-                        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                        rt.block_on(sse::serve_sse(port, &host_clone, auth_key_clone.as_deref()))
-                    });
-                    // Brief startup window — check if SSE died immediately
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    if sse_handle.is_finished() {
-                        match sse_handle.join() {
-                            Ok(Err(e)) => anyhow::bail!("SSE server failed to start: {}", e),
-                            Err(_) => anyhow::bail!("SSE server thread panicked"),
-                            Ok(Ok(())) => anyhow::bail!("SSE server exited unexpectedly"),
-                        }
-                    }
-                    mcp::serve_stdio()?;
-                }
-                #[cfg(not(feature = "sse"))]
-                "sse" | "both" => {
-                    anyhow::bail!("SSE transport requires the 'sse' feature. Rebuild with: cargo build --features sse");
-                }
-                _ => anyhow::bail!("Invalid transport: {}. Use stdio, sse, or both.", transport),
-            }
-        }
+        // Serve and Import handled above
+        Some(Commands::Serve { .. }) | Some(Commands::Import { .. }) => unreachable!(),
         None => {
             // Default action: log food
             if cli.food.is_empty() {
-                // No args, show today's totals
-                let totals = db.get_today_totals()?;
+                let totals = match &backend {
+                    Backend::Local(db) => db.get_today_totals()?,
+                    Backend::Remote(client) => client.get_today_totals()?,
+                };
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&totals)?);
                 } else {
@@ -381,10 +430,11 @@ fn main() -> Result<()> {
                     );
                 }
             } else {
-                // Log the food
                 let input = cli.food.join(" ");
-                let entry = logging::parse_and_log(&db, &input, cli.date.as_deref())?;
-
+                let entry = match &backend {
+                    Backend::Local(db) => logging::parse_and_log(db, &input, cli.date.as_deref())?,
+                    Backend::Remote(client) => client.log_food(&input, cli.date.as_deref())?,
+                };
                 if cli.json {
                     println!("{}", serde_json::to_string_pretty(&entry)?);
                 } else {
@@ -397,5 +447,54 @@ fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn run_serve(transport: &str, port: u16, host: &str, auth_key: Option<&str>) -> Result<()> {
+    match transport {
+        "stdio" => mcp::serve_stdio()?,
+        #[cfg(feature = "sse")]
+        "sse" => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(sse::serve_sse(port, host, auth_key))?;
+        }
+        #[cfg(feature = "sse")]
+        "both" => {
+            let host_clone = host.to_string();
+            let auth_key_clone = auth_key.map(String::from);
+            let sse_handle = std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                rt.block_on(sse::serve_sse(port, &host_clone, auth_key_clone.as_deref()))
+            });
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if sse_handle.is_finished() {
+                match sse_handle.join() {
+                    Ok(Err(e)) => anyhow::bail!("SSE server failed to start: {}", e),
+                    Err(_) => anyhow::bail!("SSE server thread panicked"),
+                    Ok(Ok(())) => anyhow::bail!("SSE server exited unexpectedly"),
+                }
+            }
+            mcp::serve_stdio()?;
+        }
+        #[cfg(not(feature = "sse"))]
+        "sse" | "both" => {
+            anyhow::bail!(
+                "SSE transport requires the 'sse' feature. Rebuild with: cargo build --features sse"
+            );
+        }
+        _ => anyhow::bail!("Invalid transport: {}. Use stdio, sse, or both.", transport),
+    }
+    Ok(())
+}
+
+fn run_import(db: &db::Database, source: &str, path: Option<&str>) -> Result<()> {
+    match source {
+        "usda" => db.import_usda()?,
+        "csv" => {
+            let p = path.ok_or_else(|| anyhow::anyhow!("--path required for csv import"))?;
+            db.import_csv(p)?;
+        }
+        _ => anyhow::bail!("Unknown source: {}", source),
+    }
     Ok(())
 }

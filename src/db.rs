@@ -241,8 +241,16 @@ impl Database {
         Ok(scored.into_iter().map(|(_, f)| f).take(10).collect())
     }
 
-    pub fn log_food(&self, food_id: i64, amount: &str, macros: &Macros, date: Option<&str>) -> Result<LogEntry> {
-        let date = date.map(|d| d.to_string()).unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
+    pub fn log_food(
+        &self,
+        food_id: i64,
+        amount: &str,
+        macros: &Macros,
+        date: Option<&str>,
+    ) -> Result<LogEntry> {
+        let date = date
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
 
         self.conn.execute(
             "INSERT INTO log (date, food_id, amount, protein, fat, carbs, calories)
