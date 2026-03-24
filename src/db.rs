@@ -309,6 +309,37 @@ impl Database {
         Ok(macros)
     }
 
+    pub fn get_today_entries(&self) -> Result<Vec<LogEntry>> {
+        let date = Local::now().format("%Y-%m-%d").to_string();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT l.id, l.date, COALESCE(f.name, 'deleted'), l.food_id, l.amount, l.protein, l.fat, l.carbs, l.calories
+             FROM log l
+             LEFT JOIN foods f ON l.food_id = f.id
+             WHERE l.date = ?1
+             ORDER BY l.id DESC",
+        )?;
+
+        let entries = stmt
+            .query_map(params![date], |row| {
+                Ok(LogEntry {
+                    id: Some(row.get(0)?),
+                    date: row.get(1)?,
+                    food_name: row.get(2)?,
+                    food_id: row.get(3)?,
+                    amount: row.get(4)?,
+                    protein: row.get(5)?,
+                    fat: row.get(6)?,
+                    carbs: row.get(7)?,
+                    calories: row.get(8)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(entries)
+    }
+
     pub fn get_history(&self, days: u32) -> Result<Vec<LogEntry>> {
         let start_date = Local::now()
             .checked_sub_signed(chrono::Duration::days(days as i64))
