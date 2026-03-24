@@ -1,0 +1,25 @@
+name: Database Backup
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at midnight CST (6am UTC)
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download database backup
+        run: |
+          curl -f -o foods.db \
+            -H "Authorization: Bearer ${{ secrets.CHOMP_AUTH_KEY }}" \
+            "${{ secrets.CHOMP_URL }}/api/backup"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: foods-db-${{ github.run_id }}
+          path: foods.db
+          retention-days: 90

@@ -77,6 +77,7 @@ pub async fn serve_sse(port: u16, host: &str, auth_key: Option<&str>) -> Result<
             delete(delete_log_handler).put(edit_log_handler),
         )
         .route("/api/stats", get(stats_handler))
+        .route("/api/backup", get(backup_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -575,6 +576,40 @@ async fn stats_handler() -> impl IntoResponse {
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/backup — download the SQLite database file.
+async fn backup_handler() -> impl IntoResponse {
+    let db_path = match Database::db_path() {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": format!("could not determine database path: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    match tokio::fs::read(&db_path).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/octet-stream"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"foods.db\"",
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("database file not found: {}", e)})),
         )
             .into_response(),
     }

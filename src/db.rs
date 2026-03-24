@@ -54,7 +54,7 @@ impl Database {
         Ok(Self { conn })
     }
 
-    fn db_path() -> Result<std::path::PathBuf> {
+    pub fn db_path() -> Result<std::path::PathBuf> {
         // Allow override via CHOMP_DB_PATH (for Railway/Docker deployments)
         if let Ok(path) = std::env::var("CHOMP_DB_PATH") {
             return Ok(std::path::PathBuf::from(path));
