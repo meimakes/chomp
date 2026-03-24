@@ -46,6 +46,12 @@
   .today-table td { padding: 8px 6px; border-bottom: 1px solid var(--border); }
   .today-table tr:last-child td { border: none; }
   .today-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .day-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .day-nav button { background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 6px; width: 32px; height: 32px; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; }
+  .day-nav button:hover:not(:disabled) { background: var(--border); }
+  .day-nav button:disabled { opacity: 0.3; cursor: default; }
+  .day-nav .day-label { font-size: 0.9rem; font-weight: 600; min-width: 120px; text-align: center; }
+  .day-nav .day-detail { font-size: 0.75rem; color: var(--muted); }
   .donut-container { display: flex; align-items: center; justify-content: center; }
   .donut-container canvas { max-height: 220px; }
   @media (max-width: 640px) {
@@ -78,7 +84,18 @@
 <div class="grid grid-4" id="summary-cards"><div class="loading">Loading data...</div></div>
 
 <div class="grid grid-2" id="today-section" style="display:none">
-  <div class="card" id="todayCard"><h2 style="font-size:1rem;font-weight:600;margin-bottom:12px">Today's Entries</h2><table class="today-table" id="todayTable"></table></div>
+  <div class="card" id="todayCard">
+    <div class="day-nav">
+      <button id="prevDay" title="Previous day">&#8249;</button>
+      <div style="text-align:center">
+        <div class="day-label" id="dayLabel">Today</div>
+        <div class="day-detail" id="dayDetail"></div>
+      </div>
+      <button id="nextDay" title="Next day">&#8250;</button>
+      <button id="todayBtn" title="Jump to today" style="font-size:0.7rem;width:auto;padding:0 8px;margin-left:4px">Today</button>
+    </div>
+    <table class="today-table" id="todayTable"></table>
+  </div>
   <div class="card chart-card"><h2>Macro Ratio (avg by calories)</h2><div class="donut-container"><canvas id="chartDonut"></canvas></div></div>
 </div>
 
@@ -123,7 +140,7 @@ async function loadDashboard() {
 
   const rows = csvText.trim().split('\n').slice(1).map(line => {
     const [date, food, amount, protein, fat, carbs, calories] = line.split(',');
-    return { date, food: food ? food.trim().toLowerCase() : '', protein: +protein, fat: +fat, carbs: +carbs, calories: +calories };
+    return { date, food: food ? food.trim().toLowerCase() : '', amount: amount ? amount.trim() : '', protein: +protein, fat: +fat, carbs: +carbs, calories: +calories };
   }).filter(r => r.date && !isNaN(r.calories));
 
   if (rows.length === 0) {
@@ -282,38 +299,83 @@ async function loadDashboard() {
     options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.05)' } } } }
   });
 
-  // Load today's entries
-  loadToday();
+  // Store rows globally for day navigation
+  window._allRows = rows;
+  window._allDates = dates;
+  window._viewingDate = null; // null = today
+  showDayEntries(null);
 }
 
-async function loadToday() {
-  try {
-    const resp = await fetch('/api/today');
-    const data = await resp.json();
-    const entries = data.entries || [];
+function showDayEntries(date) {
+  const rows = window._allRows || [];
+  const dates = window._allDates || [];
 
-    if (entries.length === 0) {
-      document.getElementById('todayTable').innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:16px">No entries today</td></tr>';
-    } else {
-      let html = '<thead><tr><th>Food</th><th>Amount</th><th class="num">Protein</th><th class="num">Fat</th><th class="num">Carbs</th><th class="num">Cal</th></tr></thead><tbody>';
-      for (const e of entries) {
-        html += `<tr><td>${e.food_name}</td><td>${e.amount}</td><td class="num">${e.protein.toFixed(0)}g</td><td class="num">${e.fat.toFixed(0)}g</td><td class="num">${e.carbs.toFixed(0)}g</td><td class="num">${e.calories.toFixed(0)}</td></tr>`;
-      }
-      const totals = data.totals;
-      html += `<tr style="font-weight:600;border-top:2px solid var(--border)"><td>Total</td><td></td><td class="num">${totals.protein.toFixed(0)}g</td><td class="num">${totals.fat.toFixed(0)}g</td><td class="num">${totals.carbs.toFixed(0)}g</td><td class="num">${totals.calories.toFixed(0)}</td></tr>`;
-      html += '</tbody>';
-      document.getElementById('todayTable').innerHTML = html;
+  const today = new Date().toISOString().slice(0, 10);
+  const viewDate = date || today;
+  window._viewingDate = date;
+
+  // Build list of unique dates with data, plus today if not present
+  const datesWithData = [...new Set([...dates, today])].sort();
+  const currentIdx = datesWithData.indexOf(viewDate);
+
+  // Update nav buttons
+  document.getElementById('prevDay').disabled = currentIdx <= 0;
+  document.getElementById('nextDay').disabled = !date || viewDate >= today;
+  document.getElementById('todayBtn').style.display = date ? '' : 'none';
+
+  // Update label
+  const d = new Date(viewDate + 'T12:00:00');
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const isToday = viewDate === today;
+  const isYesterday = (() => { const y = new Date(); y.setDate(y.getDate()-1); return viewDate === y.toISOString().slice(0,10); })();
+
+  let label = isToday ? 'Today' : isYesterday ? 'Yesterday' : `${dayNames[d.getDay()]}, ${monthNames[d.getMonth()]} ${d.getDate()}`;
+  document.getElementById('dayLabel').textContent = label;
+  document.getElementById('dayDetail').textContent = isToday ? viewDate : (isYesterday ? viewDate : '');
+
+  // Filter entries for this date
+  const entries = rows.filter(r => r.date === viewDate);
+
+  if (entries.length === 0) {
+    document.getElementById('todayTable').innerHTML = `<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:16px">No entries${isToday ? ' today' : ''}</td></tr>`;
+  } else {
+    let html = '<thead><tr><th>Food</th><th>Amount</th><th class="num">Protein</th><th class="num">Fat</th><th class="num">Carbs</th><th class="num">Cal</th></tr></thead><tbody>';
+    for (const e of entries) {
+      html += `<tr><td>${e.food}</td><td>${e.amount || ''}</td><td class="num">${e.protein.toFixed(0)}g</td><td class="num">${e.fat.toFixed(0)}g</td><td class="num">${e.carbs.toFixed(0)}g</td><td class="num">${e.calories.toFixed(0)}</td></tr>`;
     }
-    document.getElementById('today-section').style.display = '';
-  } catch (e) {
-    // silently skip if today endpoint fails
+    const totP = entries.reduce((s,e) => s+e.protein, 0);
+    const totF = entries.reduce((s,e) => s+e.fat, 0);
+    const totC = entries.reduce((s,e) => s+e.carbs, 0);
+    const totCal = entries.reduce((s,e) => s+e.calories, 0);
+    html += `<tr style="font-weight:600;border-top:2px solid var(--border)"><td>Total</td><td></td><td class="num">${totP.toFixed(0)}g</td><td class="num">${totF.toFixed(0)}g</td><td class="num">${totC.toFixed(0)}g</td><td class="num">${totCal.toFixed(0)}</td></tr>`;
+    html += '</tbody>';
+    document.getElementById('todayTable').innerHTML = html;
   }
+  document.getElementById('today-section').style.display = '';
+
+  // Wire up nav
+  document.getElementById('prevDay').onclick = () => {
+    if (currentIdx > 0) showDayEntries(datesWithData[currentIdx - 1]);
+  };
+  document.getElementById('nextDay').onclick = () => {
+    if (currentIdx < datesWithData.length - 1) {
+      const next = datesWithData[currentIdx + 1];
+      showDayEntries(next === today ? null : next);
+    }
+  };
+  document.getElementById('todayBtn').onclick = () => showDayEntries(null);
 }
 
 async function logout() {
   await fetch('/logout', { method: 'POST' });
   window.location.href = '/login';
 }
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft') { document.getElementById('prevDay').click(); }
+  else if (e.key === 'ArrowRight') { document.getElementById('nextDay').click(); }
+});
 
 document.getElementById('dayRange').addEventListener('change', () => {
   loadDashboard().catch(err => {
