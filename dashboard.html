@@ -52,8 +52,8 @@
   .day-nav button:disabled { opacity: 0.3; cursor: default; }
   .day-nav .day-label { font-size: 0.9rem; font-weight: 600; min-width: 120px; text-align: center; }
   .day-nav .day-detail { font-size: 0.75rem; color: var(--muted); }
-  .donut-container { display: flex; align-items: center; justify-content: center; }
-  .donut-container canvas { max-height: 220px; }
+  .donut-container { display: flex; align-items: center; justify-content: center; flex: 1; }
+  .donut-container canvas { width: 100% !important; height: 100% !important; }
   @media (max-width: 640px) {
     body { padding: 12px; }
     .card .value { font-size: 1.4rem; }
@@ -96,7 +96,7 @@
     </div>
     <table class="today-table" id="todayTable"></table>
   </div>
-  <div class="card chart-card"><h2>Macro Ratio (avg by calories)</h2><div class="donut-container"><canvas id="chartDonut"></canvas></div></div>
+  <div class="card chart-card" style="display:flex;flex-direction:column"><h2>Macro Ratio (avg by calories)</h2><div class="donut-container"><canvas id="chartDonut"></canvas></div></div>
 </div>
 
 <div class="grid grid-2">
@@ -140,7 +140,7 @@ async function loadDashboard() {
 
   const rows = csvText.trim().split('\n').slice(1).map(line => {
     const [date, food, amount, protein, fat, carbs, calories] = line.split(',');
-    return { date, food: food ? food.trim().toLowerCase() : '', amount: amount ? amount.trim() : '', protein: +protein, fat: +fat, carbs: +carbs, calories: +calories };
+    return { date, food: food ? food.trim().toLowerCase() : '', amount: amount ? amount.trim() : '', protein: +(protein||0)||0, fat: +(fat||0)||0, carbs: +(carbs||0)||0, calories: +(calories||0)||0 };
   }).filter(r => r.date && !isNaN(r.calories));
 
   if (rows.length === 0) {
@@ -260,6 +260,7 @@ async function loadDashboard() {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       cutout: '65%',
       plugins: {
         legend: { position: 'bottom', labels: { usePointStyle: true, pointStyle: 'circle', padding: 16 } },
