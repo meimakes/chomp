@@ -138,8 +138,27 @@ async function loadDashboard() {
   const resp = await fetch(`/api/export?days=${days}`);
   const csvText = await resp.text();
 
+  // CSV parser that handles quoted fields (commas inside quotes)
+  function parseCSVLine(line) {
+    const fields = [];
+    let current = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      if (inQuotes) {
+        if (line[i] === '"' && line[i+1] === '"') { current += '"'; i++; }
+        else if (line[i] === '"') { inQuotes = false; }
+        else { current += line[i]; }
+      } else {
+        if (line[i] === '"') { inQuotes = true; }
+        else if (line[i] === ',') { fields.push(current); current = ''; }
+        else { current += line[i]; }
+      }
+    }
+    fields.push(current);
+    return fields;
+  }
+
   const rows = csvText.trim().split('\n').slice(1).map(line => {
-    const [date, food, amount, protein, fat, carbs, calories] = line.split(',');
+    const [date, food, amount, protein, fat, carbs, calories] = parseCSVLine(line);
     return { date, food: food ? food.trim().toLowerCase() : '', amount: amount ? amount.trim() : '', protein: +(protein||0)||0, fat: +(fat||0)||0, carbs: +(carbs||0)||0, calories: +(calories||0)||0 };
   }).filter(r => r.date && !isNaN(r.calories));
 

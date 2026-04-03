@@ -302,9 +302,20 @@ async fn export_handler(Query(params): Query<HashMap<String, String>>) -> impl I
 
     let mut csv = String::from("date,food,amount,protein,fat,carbs,calories\n");
     for e in &entries {
+        // Quote food_name and amount since they may contain commas
+        let food_quoted = if e.food_name.contains(',') {
+            format!("\"{}\"" , e.food_name.replace('"', "\"\""))
+        } else {
+            e.food_name.clone()
+        };
+        let amount_quoted = if e.amount.contains(',') {
+            format!("\"{}\"" , e.amount.replace('"', "\"\""))
+        } else {
+            e.amount.clone()
+        };
         csv.push_str(&format!(
             "{},{},{},{:.1},{:.1},{:.1},{:.0}\n",
-            e.date, e.food_name, e.amount, e.protein, e.fat, e.carbs, e.calories
+            e.date, food_quoted, amount_quoted, e.protein, e.fat, e.carbs, e.calories
         ));
     }
 
