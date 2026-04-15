@@ -134,7 +134,7 @@ fn handle_tools_list() -> Result<Value> {
         "tools": [
             {
                 "name": "log_food",
-                "description": "Log food consumption. Returns calculated macros.",
+                "description": "Log food consumption. Returns calculated macros. When logging beverages (coffee, tea, milk, juice, etc.), also call log_water with the liquid volume and log_caffeine if caffeinated.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -326,7 +326,7 @@ fn handle_tools_list() -> Result<Value> {
             },
             {
                 "name": "log_water",
-                "description": "Log water intake. Supports ml (default), oz, cups, liters.",
+                "description": "Log water/hydration intake. Tracks ALL liquid intake including plain water, coffee, tea, milk, juice, etc. Supports ml (default), oz, cups, liters.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -344,7 +344,7 @@ fn handle_tools_list() -> Result<Value> {
             },
             {
                 "name": "get_water_today",
-                "description": "Get today's total water intake in ml.",
+                "description": "Get today's total hydration (all liquids) in ml.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -379,7 +379,7 @@ fn handle_tools_list() -> Result<Value> {
             },
             {
                 "name": "log_caffeine",
-                "description": "Log caffeine intake in mg with optional source.",
+                "description": "Log caffeine intake in mg with optional source. Common amounts: coffee ~95mg/8oz, espresso ~63mg/shot, black tea ~47mg/8oz, green tea ~28mg/8oz, cola ~34mg/12oz.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
