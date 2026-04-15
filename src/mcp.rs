@@ -323,6 +323,116 @@ fn handle_tools_list() -> Result<Value> {
                     },
                     "required": ["id"]
                 }
+            },
+            {
+                "name": "log_water",
+                "description": "Log water intake. Supports ml (default), oz, cups, liters.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {
+                            "type": "string",
+                            "description": "Water amount, e.g. '500', '500ml', '16oz', '2 cups', '1l'"
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Date in YYYY-MM-DD format (defaults to today)"
+                        }
+                    },
+                    "required": ["amount"]
+                }
+            },
+            {
+                "name": "get_water_today",
+                "description": "Get today's total water intake in ml.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "get_water_history",
+                "description": "Get water intake history.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "description": "Number of days to look back (default: 7)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "unlog_water",
+                "description": "Delete a water log entry by ID.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Water log entry ID to delete"
+                        }
+                    },
+                    "required": ["id"]
+                }
+            },
+            {
+                "name": "log_caffeine",
+                "description": "Log caffeine intake in mg with optional source.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "amount_mg": {
+                            "type": "number",
+                            "description": "Caffeine amount in milligrams"
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Source of caffeine, e.g. 'coffee', 'tea', 'energy drink'"
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Date in YYYY-MM-DD format (defaults to today)"
+                        }
+                    },
+                    "required": ["amount_mg"]
+                }
+            },
+            {
+                "name": "get_caffeine_today",
+                "description": "Get today's total caffeine intake in mg.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "get_caffeine_history",
+                "description": "Get caffeine intake history.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "description": "Number of days to look back (default: 7)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "unlog_caffeine",
+                "description": "Delete a caffeine log entry by ID.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Caffeine log entry ID to delete"
+                        }
+                    },
+                    "required": ["id"]
+                }
             }
         ]
     }))
@@ -479,6 +589,107 @@ fn handle_tools_call(db: &Database, params: &Value) -> Result<Value> {
                 "content": [{
                     "type": "text",
                     "text": serde_json::to_string_pretty(&entry)?
+                }]
+            }))
+        }
+        "log_water" => {
+            let amount = arguments["amount"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'amount' argument"))?;
+            let ml = crate::food::parse_water_ml(amount)
+                .ok_or_else(|| anyhow::anyhow!("Could not parse water amount: '{}'", amount))?;
+            let date = arguments["date"].as_str();
+            let entry = db.log_water(ml, date)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Logged {:.0}ml water ({:.1} oz)", entry.amount_ml, entry.amount_ml / 29.5735)
+                }]
+            }))
+        }
+        "get_water_today" => {
+            let totals = db.get_today_water()?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&totals)?
+                }]
+            }))
+        }
+        "get_water_history" => {
+            let days = arguments["days"].as_u64().unwrap_or(7) as u32;
+            let entries = db.get_water_history(days)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&entries)?
+                }]
+            }))
+        }
+        "unlog_water" => {
+            let id = arguments["id"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'id' argument"))?;
+            let entry = db.delete_water_entry(id)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Deleted water entry: {:.0}ml on {}", entry.amount_ml, entry.date)
+                }]
+            }))
+        }
+        "log_caffeine" => {
+            let amount_mg = arguments["amount_mg"]
+                .as_f64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'amount_mg' argument"))?;
+            let source = arguments["source"].as_str().unwrap_or("");
+            let date = arguments["date"].as_str();
+            let entry = db.log_caffeine(amount_mg, source, date)?;
+            let src = if entry.source.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", entry.source)
+            };
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Logged {:.0}mg caffeine{}", entry.amount_mg, src)
+                }]
+            }))
+        }
+        "get_caffeine_today" => {
+            let totals = db.get_today_caffeine()?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&totals)?
+                }]
+            }))
+        }
+        "get_caffeine_history" => {
+            let days = arguments["days"].as_u64().unwrap_or(7) as u32;
+            let entries = db.get_caffeine_history(days)?;
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&entries)?
+                }]
+            }))
+        }
+        "unlog_caffeine" => {
+            let id = arguments["id"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Missing 'id' argument"))?;
+            let entry = db.delete_caffeine_entry(id)?;
+            let src = if entry.source.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", entry.source)
+            };
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Deleted caffeine entry: {:.0}mg{} on {}", entry.amount_mg, src, entry.date)
                 }]
             }))
         }

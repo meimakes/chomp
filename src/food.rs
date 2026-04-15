@@ -147,6 +147,41 @@ fn to_grams(value: f64, unit: &str) -> Option<f64> {
     }
 }
 
+/// Parse a water amount string and return the value in ml.
+/// Supports: ml (default), oz, cups, liters, gallons.
+/// e.g., "500" -> 500ml, "16oz" -> ~473ml, "2cups" -> 480ml
+pub fn parse_water_ml(input: &str) -> Option<f64> {
+    let input = input.trim().to_lowercase();
+    let parts: Vec<&str> = input.split_whitespace().collect();
+
+    let (val, unit) = if parts.len() == 2 {
+        let num: f64 = parts[0].parse().ok()?;
+        (num, parts[1].to_string())
+    } else if parts.len() == 1 {
+        let part = parts[0];
+        if let Some(num_end) = part.find(|c: char| !c.is_numeric() && c != '.') {
+            let num: f64 = part[..num_end].parse().ok()?;
+            (num, part[num_end..].to_string())
+        } else {
+            let num: f64 = part.parse().ok()?;
+            (num, "ml".to_string())
+        }
+    } else {
+        return None;
+    };
+
+    let ml = match unit.as_str() {
+        "ml" | "milliliter" | "milliliters" => val,
+        "l" | "liter" | "liters" => val * 1000.0,
+        "oz" | "floz" => val * 29.5735,
+        "cup" | "cups" => val * 236.588,
+        "gal" | "gallon" | "gallons" => val * 3785.41,
+        _ => val, // default to ml
+    };
+
+    Some(ml)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +271,17 @@ mod tests {
         let m = food.calculate("200").unwrap();
         assert!((m.protein - 5.4).abs() < 0.01);
         assert!((m.calories - 260.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_water_ml() {
+        assert!((parse_water_ml("500").unwrap() - 500.0).abs() < 0.01);
+        assert!((parse_water_ml("500ml").unwrap() - 500.0).abs() < 0.01);
+        assert!((parse_water_ml("16oz").unwrap() - 473.176).abs() < 0.1);
+        assert!((parse_water_ml("16 oz").unwrap() - 473.176).abs() < 0.1);
+        assert!((parse_water_ml("2cups").unwrap() - 473.176).abs() < 0.1);
+        assert!((parse_water_ml("1l").unwrap() - 1000.0).abs() < 0.01);
+        assert!((parse_water_ml("1 liter").unwrap() - 1000.0).abs() < 0.01);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 
-use crate::db::{LogEntry, Stats};
+use crate::db::{CaffeineEntry, CaffeineTotals, LogEntry, Stats, WaterEntry, WaterTotals};
 
 fn encode_path(s: &str) -> String {
     s.replace('%', "%25")
@@ -81,6 +81,7 @@ impl RemoteClient {
         Ok(resp.json()?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_food(
         &self,
         name: &str,
@@ -207,6 +208,98 @@ impl RemoteClient {
 
     pub fn get_stats(&self) -> Result<Stats> {
         let resp = self.get("/api/stats").send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    // ── Water ────────────────────────────────────────────────
+
+    pub fn log_water(&self, amount_ml: f64, date: Option<&str>) -> Result<WaterEntry> {
+        let mut body = serde_json::json!({"amount": format!("{}ml", amount_ml)});
+        if let Some(d) = date {
+            body["date"] = serde_json::Value::String(d.to_string());
+        }
+        let resp = self.post("/api/water").json(&body).send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    pub fn get_today_water(&self) -> Result<WaterTotals> {
+        let resp = self.get("/api/water").send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_water_history(&self, days: u32) -> Result<Vec<WaterEntry>> {
+        let resp = self
+            .get("/api/water/history")
+            .query(&[("days", days.to_string())])
+            .send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_water_entry(&self, id: i64) -> Result<WaterEntry> {
+        let resp = self.delete(&format!("/api/water/{}", id)).send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_last_water_entry(&self) -> Result<WaterEntry> {
+        let resp = self.delete("/api/water/last").send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    // ── Caffeine ─────────────────────────────────────────────
+
+    pub fn log_caffeine(
+        &self,
+        amount_mg: f64,
+        source: &str,
+        date: Option<&str>,
+    ) -> Result<CaffeineEntry> {
+        let mut body = serde_json::json!({
+            "amount_mg": amount_mg,
+            "source": source,
+        });
+        if let Some(d) = date {
+            body["date"] = serde_json::Value::String(d.to_string());
+        }
+        let resp = self.post("/api/caffeine").json(&body).send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    pub fn get_today_caffeine(&self) -> Result<CaffeineTotals> {
+        let resp = self.get("/api/caffeine").send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_caffeine_history(&self, days: u32) -> Result<Vec<CaffeineEntry>> {
+        let resp = self
+            .get("/api/caffeine/history")
+            .query(&[("days", days.to_string())])
+            .send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_caffeine_entry(&self, id: i64) -> Result<CaffeineEntry> {
+        let resp = self.delete(&format!("/api/caffeine/{}", id)).send()?;
+        let resp = Self::check_response(resp)?;
+        Ok(resp.json()?)
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_last_caffeine_entry(&self) -> Result<CaffeineEntry> {
+        let resp = self.delete("/api/caffeine/last").send()?;
         let resp = Self::check_response(resp)?;
         Ok(resp.json()?)
     }

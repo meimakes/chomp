@@ -77,6 +77,20 @@ pub async fn serve_sse(port: u16, host: &str, auth_key: Option<&str>) -> Result<
             delete(delete_log_handler).put(edit_log_handler),
         )
         .route("/api/stats", get(stats_handler))
+        .route(
+            "/api/water",
+            get(water_today_handler).post(log_water_handler),
+        )
+        .route("/api/water/history", get(water_history_handler))
+        .route("/api/water/:id", delete(delete_water_handler))
+        .route("/api/water/last", delete(delete_last_water_handler))
+        .route(
+            "/api/caffeine",
+            get(caffeine_today_handler).post(log_caffeine_handler),
+        )
+        .route("/api/caffeine/history", get(caffeine_history_handler))
+        .route("/api/caffeine/:id", delete(delete_caffeine_handler))
+        .route("/api/caffeine/last", delete(delete_last_caffeine_handler))
         .route("/api/backup", get(backup_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -155,7 +169,9 @@ async fn auth_middleware(
         if !bearer_ok && !cookie_ok {
             // Redirect browsers to login page; return 401 for API clients
             if is_browser_request(&request) {
-                let path = request.uri().path_and_query()
+                let path = request
+                    .uri()
+                    .path_and_query()
                     .map(|pq| pq.as_str())
                     .unwrap_or("/dashboard");
                 let login_url = format!("/login?next={}", urlencoding::encode(path));
@@ -304,12 +320,12 @@ async fn export_handler(Query(params): Query<HashMap<String, String>>) -> impl I
     for e in &entries {
         // Quote food_name and amount since they may contain commas
         let food_quoted = if e.food_name.contains(',') {
-            format!("\"{}\"" , e.food_name.replace('"', "\"\""))
+            format!("\"{}\"", e.food_name.replace('"', "\"\""))
         } else {
             e.food_name.clone()
         };
         let amount_quoted = if e.amount.contains(',') {
-            format!("\"{}\"" , e.amount.replace('"', "\"\""))
+            format!("\"{}\"", e.amount.replace('"', "\"\""))
         } else {
             e.amount.clone()
         };
@@ -331,10 +347,14 @@ async fn today_handler() -> impl IntoResponse {
 
     let totals = db.get_today_totals().unwrap_or_default();
     let entries = db.get_today_entries().unwrap_or_default();
+    let water = db.get_today_water().unwrap_or_default();
+    let caffeine = db.get_today_caffeine().unwrap_or_default();
 
     Json(serde_json::json!({
         "totals": totals,
-        "entries": entries
+        "entries": entries,
+        "water": water,
+        "caffeine": caffeine
     }))
     .into_response()
 }
@@ -575,6 +595,207 @@ async fn edit_log_handler(
     }
 }
 
+// --- Water API handlers ---
+
+#[derive(Deserialize)]
+struct LogWaterRequest {
+    amount: String,
+    date: Option<String>,
+}
+
+/// POST /api/water — log water intake.
+async fn log_water_handler(Json(body): Json<LogWaterRequest>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    let ml = match crate::food::parse_water_ml(&body.amount) {
+        Some(ml) => ml,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Could not parse water amount: '{}'", body.amount)})),
+            )
+                .into_response()
+        }
+    };
+
+    match db.log_water(ml, body.date.as_deref()) {
+        Ok(entry) => (StatusCode::CREATED, Json(serde_json::json!(entry))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/water — get today's water totals.
+async fn water_today_handler() -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.get_today_water() {
+        Ok(totals) => Json(serde_json::json!(totals)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/water/history?days=N — get water history.
+async fn water_history_handler(Query(params): Query<HistoryQuery>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    let days = params.days.unwrap_or(7);
+    match db.get_water_history(days) {
+        Ok(entries) => Json(serde_json::json!(entries)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/water/:id — delete a water entry.
+async fn delete_water_handler(Path(id): Path<i64>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.delete_water_entry(id) {
+        Ok(entry) => Json(serde_json::json!(entry)).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/water/last — delete the most recent water entry.
+async fn delete_last_water_handler() -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.delete_last_water_entry() {
+        Ok(entry) => Json(serde_json::json!(entry)).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+// --- Caffeine API handlers ---
+
+#[derive(Deserialize)]
+struct LogCaffeineRequest {
+    amount_mg: f64,
+    #[serde(default)]
+    source: String,
+    date: Option<String>,
+}
+
+/// POST /api/caffeine — log caffeine intake.
+async fn log_caffeine_handler(Json(body): Json<LogCaffeineRequest>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.log_caffeine(body.amount_mg, &body.source, body.date.as_deref()) {
+        Ok(entry) => (StatusCode::CREATED, Json(serde_json::json!(entry))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/caffeine — get today's caffeine totals.
+async fn caffeine_today_handler() -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.get_today_caffeine() {
+        Ok(totals) => Json(serde_json::json!(totals)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/caffeine/history?days=N — get caffeine history.
+async fn caffeine_history_handler(Query(params): Query<HistoryQuery>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    let days = params.days.unwrap_or(7);
+    match db.get_caffeine_history(days) {
+        Ok(entries) => Json(serde_json::json!(entries)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/caffeine/:id — delete a caffeine entry.
+async fn delete_caffeine_handler(Path(id): Path<i64>) -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.delete_caffeine_entry(id) {
+        Ok(entry) => Json(serde_json::json!(entry)).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/caffeine/last — delete the most recent caffeine entry.
+async fn delete_last_caffeine_handler() -> impl IntoResponse {
+    let db = match open_db() {
+        Ok(db) => db,
+        Err(e) => return e.into_response(),
+    };
+
+    match db.delete_last_caffeine_entry() {
+        Ok(entry) => Json(serde_json::json!(entry)).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/stats — get database stats.
 async fn stats_handler() -> impl IntoResponse {
     let db = match open_db() {
@@ -596,13 +817,11 @@ async fn stats_handler() -> impl IntoResponse {
 async fn backup_handler() -> impl IntoResponse {
     let db_path = match Database::db_path() {
         Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": format!("could not determine database path: {}", e)})),
-            )
-                .into_response()
-        }
+        Err(e) => return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": format!("could not determine database path: {}", e)})),
+        )
+            .into_response(),
     };
 
     match tokio::fs::read(&db_path).await {

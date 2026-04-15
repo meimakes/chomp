@@ -139,6 +139,26 @@ enum Commands {
         #[arg(long, short = 'i')]
         items: String,
     },
+    /// Log water intake (default: ml, supports oz/cups/l)
+    Water {
+        /// Amount (e.g., "500", "16oz", "2 cups")
+        #[arg(trailing_var_arg = true)]
+        amount: Vec<String>,
+        /// Date to log for (YYYY-MM-DD format, defaults to today)
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// Log caffeine intake in mg
+    Caffeine {
+        /// Amount in mg
+        amount: f64,
+        /// Source (e.g., coffee, tea, energy drink)
+        #[arg(long, short, default_value = "")]
+        source: String,
+        /// Date to log for (YYYY-MM-DD format, defaults to today)
+        #[arg(long)]
+        date: Option<String>,
+    },
     /// Show database stats
     Stats,
     /// Start MCP server (for AI assistants like Claude Desktop)
@@ -254,12 +274,31 @@ fn main() -> Result<()> {
                 Backend::Local(db) => db.get_today_totals()?,
                 Backend::Remote(client) => client.get_today_totals()?,
             };
+            let water = match &backend {
+                Backend::Local(db) => db.get_today_water()?,
+                Backend::Remote(client) => client.get_today_water()?,
+            };
+            let caffeine = match &backend {
+                Backend::Local(db) => db.get_today_caffeine()?,
+                Backend::Remote(client) => client.get_today_caffeine()?,
+            };
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&totals)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "macros": totals,
+                        "water": water,
+                        "caffeine": caffeine,
+                    }))?
+                );
             } else {
                 println!(
                     "Today: {:.0}p / {:.0}f / {:.0}c — {:.0} kcal",
                     totals.protein, totals.fat, totals.carbs, totals.calories
+                );
+                println!(
+                    "       {:.0}ml water / {:.0}mg caffeine",
+                    water.total_ml, caffeine.total_mg
                 );
             }
         }
@@ -402,6 +441,61 @@ fn main() -> Result<()> {
                 anyhow::bail!("Compound food creation is only available in local mode");
             }
         },
+        Some(Commands::Water { amount, date }) => {
+            let input = amount.join(" ");
+            if input.is_empty() {
+                // Show today's water total
+                let totals = match &backend {
+                    Backend::Local(db) => db.get_today_water()?,
+                    Backend::Remote(client) => client.get_today_water()?,
+                };
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&totals)?);
+                } else {
+                    println!(
+                        "Water today: {:.0}ml ({:.1} oz)",
+                        totals.total_ml,
+                        totals.total_ml / 29.5735
+                    );
+                }
+            } else {
+                let ml = food::parse_water_ml(&input)
+                    .ok_or_else(|| anyhow::anyhow!("Could not parse water amount: '{}'", input))?;
+                let entry = match &backend {
+                    Backend::Local(db) => db.log_water(ml, date.as_deref())?,
+                    Backend::Remote(client) => client.log_water(ml, date.as_deref())?,
+                };
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&entry)?);
+                } else {
+                    println!(
+                        "Logged: {:.0}ml water ({:.1} oz)",
+                        entry.amount_ml,
+                        entry.amount_ml / 29.5735
+                    );
+                }
+            }
+        }
+        Some(Commands::Caffeine {
+            amount,
+            source,
+            date,
+        }) => {
+            let entry = match &backend {
+                Backend::Local(db) => db.log_caffeine(amount, &source, date.as_deref())?,
+                Backend::Remote(client) => client.log_caffeine(amount, &source, date.as_deref())?,
+            };
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&entry)?);
+            } else {
+                let src = if entry.source.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", entry.source)
+                };
+                println!("Logged: {:.0}mg caffeine{}", entry.amount_mg, src);
+            }
+        }
         Some(Commands::Stats) => {
             let stats = match &backend {
                 Backend::Local(db) => db.get_stats()?,
@@ -421,12 +515,31 @@ fn main() -> Result<()> {
                     Backend::Local(db) => db.get_today_totals()?,
                     Backend::Remote(client) => client.get_today_totals()?,
                 };
+                let water = match &backend {
+                    Backend::Local(db) => db.get_today_water()?,
+                    Backend::Remote(client) => client.get_today_water()?,
+                };
+                let caffeine = match &backend {
+                    Backend::Local(db) => db.get_today_caffeine()?,
+                    Backend::Remote(client) => client.get_today_caffeine()?,
+                };
                 if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&totals)?);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "macros": totals,
+                            "water": water,
+                            "caffeine": caffeine,
+                        }))?
+                    );
                 } else {
                     println!(
                         "Today: {:.0}p / {:.0}f / {:.0}c — {:.0} kcal",
                         totals.protein, totals.fat, totals.carbs, totals.calories
+                    );
+                    println!(
+                        "       {:.0}ml water / {:.0}mg caffeine",
+                        water.total_ml, caffeine.total_mg
                     );
                 }
             } else {

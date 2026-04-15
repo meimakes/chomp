@@ -104,6 +104,10 @@
   <div class="card chart-card"><h2>Daily Fat & Carbs</h2><canvas id="chartMacros"></canvas></div>
 </div>
 <div class="grid grid-2" style="margin-top:16px">
+  <div class="card chart-card"><h2>Daily Water Intake</h2><canvas id="chartWater"></canvas></div>
+  <div class="card chart-card"><h2>Daily Caffeine Intake</h2><canvas id="chartCaffeine"></canvas></div>
+</div>
+<div class="grid grid-2" style="margin-top:16px">
   <div class="card" id="targets"></div>
   <div class="card" id="topFoods"><h2 style="font-size:1rem;font-weight:600;margin-bottom:12px">Top Foods by Frequency</h2><ul class="food-list" id="foodList"></ul></div>
 </div>
@@ -118,6 +122,8 @@ const params = new URLSearchParams(window.location.search);
 const TARGET_PROTEIN = +(params.get('protein') || 100);
 const TARGET_CALORIES = +(params.get('calories') || 2000);
 const CALORIE_MODE = params.get('calorieMode') || 'under'; // 'under' or 'over'
+const TARGET_WATER = +(params.get('water') || 2500); // ml
+const TARGET_CAFFEINE = +(params.get('caffeine') || 400); // mg
 
 // Track chart instances for cleanup on reload
 let chartInstances = [];
@@ -135,8 +141,14 @@ async function loadDashboard() {
   destroyCharts();
 
   const days = document.getElementById('dayRange').value;
-  const resp = await fetch(`/api/export?days=${days}`);
+  const [resp, waterResp, caffeineResp] = await Promise.all([
+    fetch(`/api/export?days=${days}`),
+    fetch(`/api/water/history?days=${days}`),
+    fetch(`/api/caffeine/history?days=${days}`)
+  ]);
   const csvText = await resp.text();
+  const waterEntries = await waterResp.json();
+  const caffeineEntries = await caffeineResp.json();
 
   // CSV parser that handles quoted fields (commas inside quotes)
   function parseCSVLine(line) {
@@ -170,12 +182,35 @@ async function loadDashboard() {
   // Aggregate by day
   const daily = {};
   rows.forEach(r => {
-    if (!daily[r.date]) daily[r.date] = { protein: 0, fat: 0, carbs: 0, calories: 0 };
+    if (!daily[r.date]) daily[r.date] = { protein: 0, fat: 0, carbs: 0, calories: 0, water_ml: 0, caffeine_mg: 0 };
     daily[r.date].protein += r.protein;
     daily[r.date].fat += r.fat;
     daily[r.date].carbs += r.carbs;
     daily[r.date].calories += r.calories;
   });
+
+  // Aggregate water by day
+  const dailyWater = {};
+  (waterEntries || []).forEach(e => {
+    if (!dailyWater[e.date]) dailyWater[e.date] = 0;
+    dailyWater[e.date] += e.amount_ml;
+  });
+
+  // Aggregate caffeine by day
+  const dailyCaffeine = {};
+  (caffeineEntries || []).forEach(e => {
+    if (!dailyCaffeine[e.date]) dailyCaffeine[e.date] = 0;
+    dailyCaffeine[e.date] += e.amount_mg;
+  });
+
+  // Merge water/caffeine into daily and collect all dates
+  const allDatesSet = new Set([...Object.keys(daily), ...Object.keys(dailyWater), ...Object.keys(dailyCaffeine)]);
+  allDatesSet.forEach(d => {
+    if (!daily[d]) daily[d] = { protein: 0, fat: 0, carbs: 0, calories: 0, water_ml: 0, caffeine_mg: 0 };
+    daily[d].water_ml = dailyWater[d] || 0;
+    daily[d].caffeine_mg = dailyCaffeine[d] || 0;
+  });
+
   const dates = Object.keys(daily).sort();
   const dayData = dates.map(d => daily[d]);
   const n = dates.length;
@@ -186,16 +221,23 @@ async function loadDashboard() {
   const avg = k => (dayData.reduce((s, d) => s + d[k], 0) / n).toFixed(0);
   const avgCal = avg('calories'), avgP = avg('protein'), avgF = avg('fat'), avgC = avg('carbs');
 
+  // Water & caffeine averages
+  const avgW = (dayData.reduce((s, d) => s + d.water_ml, 0) / n).toFixed(0);
+  const avgCaff = (dayData.reduce((s, d) => s + d.caffeine_mg, 0) / n).toFixed(0);
+
   // Summary cards
   const proteinHit = dayData.filter(d => d.protein >= TARGET_PROTEIN).length;
   const calHit = CALORIE_MODE === 'under'
     ? dayData.filter(d => d.calories <= TARGET_CALORIES).length
     : dayData.filter(d => d.calories >= TARGET_CALORIES).length;
   const calLabel = CALORIE_MODE === 'under' ? `\u2264 ${TARGET_CALORIES}` : `\u2265 ${TARGET_CALORIES}`;
+  const waterHit = dayData.filter(d => d.water_ml >= TARGET_WATER).length;
 
   document.getElementById('summary-cards').innerHTML = `
     <div class="card"><h3>Avg Calories</h3><div class="value">${avgCal}</div><div class="detail">per day</div></div>
     <div class="card"><h3>Avg Protein</h3><div class="value" style="color:var(--accent)">${avgP}g</div><div class="detail">target: ${TARGET_PROTEIN}g</div></div>
+    <div class="card"><h3>Avg Water</h3><div class="value" style="color:var(--blue)">${avgW}ml</div><div class="detail">${waterHit}/${n} days \u2265 ${TARGET_WATER}ml</div></div>
+    <div class="card"><h3>Avg Caffeine</h3><div class="value" style="color:var(--amber)">${avgCaff}mg</div><div class="detail">target: \u2264 ${TARGET_CAFFEINE}mg</div></div>
     <div class="card"><h3>Protein Days Hit</h3><div class="value ${proteinHit/n>.5?'hit':'miss'}">${proteinHit}/${n}</div><div class="detail">${(proteinHit/n*100).toFixed(0)}% of days \u2265 ${TARGET_PROTEIN}g</div></div>
     <div class="card"><h3>Calorie Days Hit</h3><div class="value ${calHit/n>.5?'hit':'miss'}">${calHit}/${n}</div><div class="detail">${(calHit/n*100).toFixed(0)}% of days ${calLabel}</div></div>
   `;
@@ -296,6 +338,57 @@ async function loadDashboard() {
     }
   });
 
+  // Water chart
+  createChart(document.getElementById('chartWater'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Water (ml)',
+        data: dayData.map(d => d.water_ml),
+        backgroundColor: 'rgba(96,165,250,0.6)',
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        annotation: undefined
+      },
+      scales: {
+        y: {
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          title: { display: true, text: 'ml' }
+        }
+      }
+    }
+  });
+
+  // Caffeine chart
+  createChart(document.getElementById('chartCaffeine'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Caffeine (mg)',
+        data: dayData.map(d => d.caffeine_mg),
+        backgroundColor: 'rgba(251,191,36,0.6)',
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: {
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          title: { display: true, text: 'mg' }
+        }
+      }
+    }
+  });
+
   // Day of week
   const dowNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const dowBuckets = Array(7).fill(null).map(() => ({ cal: [], pro: [] }));
@@ -322,6 +415,8 @@ async function loadDashboard() {
   // Store rows globally for day navigation
   window._allRows = rows;
   window._allDates = dates;
+  window._dailyWater = dailyWater;
+  window._dailyCaffeine = dailyCaffeine;
   window._viewingDate = null; // null = today
   showDayEntries(null);
 }
@@ -357,7 +452,11 @@ function showDayEntries(date) {
   // Filter entries for this date
   const entries = rows.filter(r => r.date === viewDate);
 
-  if (entries.length === 0) {
+  // Get water/caffeine for this day
+  const dayWaterMl = (window._dailyWater || {})[viewDate] || 0;
+  const dayCaffeineMg = (window._dailyCaffeine || {})[viewDate] || 0;
+
+  if (entries.length === 0 && dayWaterMl === 0 && dayCaffeineMg === 0) {
     document.getElementById('todayTable').innerHTML = `<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:16px">No entries${isToday ? ' today' : ''}</td></tr>`;
   } else {
     let html = '<thead><tr><th>Food</th><th>Amount</th><th class="num">Protein</th><th class="num">Fat</th><th class="num">Carbs</th><th class="num">Cal</th></tr></thead><tbody>';
@@ -369,6 +468,8 @@ function showDayEntries(date) {
     const totC = entries.reduce((s,e) => s+e.carbs, 0);
     const totCal = entries.reduce((s,e) => s+e.calories, 0);
     html += `<tr style="font-weight:600;border-top:2px solid var(--border)"><td>Total</td><td></td><td class="num">${totP.toFixed(0)}g</td><td class="num">${totF.toFixed(0)}g</td><td class="num">${totC.toFixed(0)}g</td><td class="num">${totCal.toFixed(0)}</td></tr>`;
+    // Water & caffeine summary row
+    html += `<tr style="border-top:1px solid var(--border)"><td colspan="2" style="color:var(--blue)">Water: ${dayWaterMl.toFixed(0)}ml</td><td colspan="4" style="color:var(--amber)">Caffeine: ${dayCaffeineMg.toFixed(0)}mg</td></tr>`;
     html += '</tbody>';
     document.getElementById('todayTable').innerHTML = html;
   }

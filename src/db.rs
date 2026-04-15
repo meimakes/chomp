@@ -25,6 +25,31 @@ pub struct LogEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct WaterEntry {
+    pub id: Option<i64>,
+    pub date: String,
+    pub amount_ml: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WaterTotals {
+    pub total_ml: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CaffeineEntry {
+    pub id: Option<i64>,
+    pub date: String,
+    pub amount_mg: f64,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CaffeineTotals {
+    pub total_mg: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Stats {
     pub food_count: i64,
     pub log_count: i64,
@@ -114,9 +139,26 @@ impl Database {
                 FOREIGN KEY (food_id) REFERENCES foods(id)
             );
 
+            CREATE TABLE IF NOT EXISTS water_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount_ml REAL NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS caffeine_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount_mg REAL NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_log_date ON log(date);
             CREATE INDEX IF NOT EXISTS idx_foods_name ON foods(name);
             CREATE INDEX IF NOT EXISTS idx_aliases_alias ON aliases(alias);
+            CREATE INDEX IF NOT EXISTS idx_water_log_date ON water_log(date);
+            CREATE INDEX IF NOT EXISTS idx_caffeine_log_date ON caffeine_log(date);
             ",
         )?;
         Ok(())
@@ -801,6 +843,180 @@ impl Database {
         })
     }
 
+    // ── Water tracking ───────────────────────────────────────────
+
+    pub fn log_water(&self, amount_ml: f64, date: Option<&str>) -> Result<WaterEntry> {
+        let date = date
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
+
+        self.conn.execute(
+            "INSERT INTO water_log (date, amount_ml) VALUES (?1, ?2)",
+            params![date, amount_ml],
+        )?;
+
+        let id = self.conn.last_insert_rowid();
+        Ok(WaterEntry {
+            id: Some(id),
+            date,
+            amount_ml,
+        })
+    }
+
+    pub fn get_today_water(&self) -> Result<WaterTotals> {
+        let date = Local::now().format("%Y-%m-%d").to_string();
+        let total_ml: f64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(amount_ml), 0) FROM water_log WHERE date = ?1",
+            params![date],
+            |row| row.get(0),
+        )?;
+        Ok(WaterTotals { total_ml })
+    }
+
+    pub fn get_water_history(&self, days: u32) -> Result<Vec<WaterEntry>> {
+        let start_date = Local::now()
+            .checked_sub_signed(chrono::Duration::days(days as i64))
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, date, amount_ml FROM water_log
+             WHERE date >= ?1
+             ORDER BY date DESC, id DESC",
+        )?;
+
+        let entries = stmt
+            .query_map(params![start_date], |row| {
+                Ok(WaterEntry {
+                    id: Some(row.get(0)?),
+                    date: row.get(1)?,
+                    amount_ml: row.get(2)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(entries)
+    }
+
+    pub fn delete_water_entry(&self, id: i64) -> Result<WaterEntry> {
+        let entry: WaterEntry = self.conn.query_row(
+            "SELECT id, date, amount_ml FROM water_log WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(WaterEntry {
+                    id: Some(row.get(0)?),
+                    date: row.get(1)?,
+                    amount_ml: row.get(2)?,
+                })
+            },
+        )?;
+        self.conn
+            .execute("DELETE FROM water_log WHERE id = ?1", params![id])?;
+        Ok(entry)
+    }
+
+    pub fn delete_last_water_entry(&self) -> Result<WaterEntry> {
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM water_log ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        self.delete_water_entry(id)
+    }
+
+    // ── Caffeine tracking ────────────────────────────────────────
+
+    pub fn log_caffeine(
+        &self,
+        amount_mg: f64,
+        source: &str,
+        date: Option<&str>,
+    ) -> Result<CaffeineEntry> {
+        let date = date
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
+
+        self.conn.execute(
+            "INSERT INTO caffeine_log (date, amount_mg, source) VALUES (?1, ?2, ?3)",
+            params![date, amount_mg, source],
+        )?;
+
+        let id = self.conn.last_insert_rowid();
+        Ok(CaffeineEntry {
+            id: Some(id),
+            date,
+            amount_mg,
+            source: source.to_string(),
+        })
+    }
+
+    pub fn get_today_caffeine(&self) -> Result<CaffeineTotals> {
+        let date = Local::now().format("%Y-%m-%d").to_string();
+        let total_mg: f64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(amount_mg), 0) FROM caffeine_log WHERE date = ?1",
+            params![date],
+            |row| row.get(0),
+        )?;
+        Ok(CaffeineTotals { total_mg })
+    }
+
+    pub fn get_caffeine_history(&self, days: u32) -> Result<Vec<CaffeineEntry>> {
+        let start_date = Local::now()
+            .checked_sub_signed(chrono::Duration::days(days as i64))
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, date, amount_mg, source FROM caffeine_log
+             WHERE date >= ?1
+             ORDER BY date DESC, id DESC",
+        )?;
+
+        let entries = stmt
+            .query_map(params![start_date], |row| {
+                Ok(CaffeineEntry {
+                    id: Some(row.get(0)?),
+                    date: row.get(1)?,
+                    amount_mg: row.get(2)?,
+                    source: row.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(entries)
+    }
+
+    pub fn delete_caffeine_entry(&self, id: i64) -> Result<CaffeineEntry> {
+        let entry: CaffeineEntry = self.conn.query_row(
+            "SELECT id, date, amount_mg, source FROM caffeine_log WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(CaffeineEntry {
+                    id: Some(row.get(0)?),
+                    date: row.get(1)?,
+                    amount_mg: row.get(2)?,
+                    source: row.get(3)?,
+                })
+            },
+        )?;
+        self.conn
+            .execute("DELETE FROM caffeine_log WHERE id = ?1", params![id])?;
+        Ok(entry)
+    }
+
+    pub fn delete_last_caffeine_entry(&self) -> Result<CaffeineEntry> {
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM caffeine_log ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        self.delete_caffeine_entry(id)
+    }
+
     /// Create a compound food from component foods with amounts
     /// items: Vec<(food_name, amount_str)>
     pub fn create_compound_food(&self, name: &str, items: &[(String, String)]) -> Result<()> {
@@ -1097,6 +1313,53 @@ mod tests {
         let stats = db.get_stats().unwrap();
         assert_eq!(stats.food_count, 1);
         assert_eq!(stats.log_count, 1);
+    }
+
+    #[test]
+    fn test_log_water() {
+        let db = test_db();
+        let entry = db.log_water(500.0, None).unwrap();
+        assert_eq!(entry.amount_ml, 500.0);
+
+        let totals = db.get_today_water().unwrap();
+        assert_eq!(totals.total_ml, 500.0);
+
+        db.log_water(250.0, None).unwrap();
+        let totals = db.get_today_water().unwrap();
+        assert_eq!(totals.total_ml, 750.0);
+    }
+
+    #[test]
+    fn test_delete_water_entry() {
+        let db = test_db();
+        let entry = db.log_water(500.0, None).unwrap();
+        db.delete_water_entry(entry.id.unwrap()).unwrap();
+        let totals = db.get_today_water().unwrap();
+        assert_eq!(totals.total_ml, 0.0);
+    }
+
+    #[test]
+    fn test_log_caffeine() {
+        let db = test_db();
+        let entry = db.log_caffeine(95.0, "coffee", None).unwrap();
+        assert_eq!(entry.amount_mg, 95.0);
+        assert_eq!(entry.source, "coffee");
+
+        let totals = db.get_today_caffeine().unwrap();
+        assert_eq!(totals.total_mg, 95.0);
+
+        db.log_caffeine(47.0, "tea", None).unwrap();
+        let totals = db.get_today_caffeine().unwrap();
+        assert_eq!(totals.total_mg, 142.0);
+    }
+
+    #[test]
+    fn test_delete_caffeine_entry() {
+        let db = test_db();
+        let entry = db.log_caffeine(95.0, "coffee", None).unwrap();
+        db.delete_caffeine_entry(entry.id.unwrap()).unwrap();
+        let totals = db.get_today_caffeine().unwrap();
+        assert_eq!(totals.total_mg, 0.0);
     }
 
     #[test]
